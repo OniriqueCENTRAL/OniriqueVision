@@ -9,13 +9,15 @@
 #endif
 
 //==============================================================================
-//  L'interface de VISION (1240 × 800 points, de 70 à 200 % sans déformation), dans la DA de VOCALBOX :
-//    barre du haut   presets, IN (bypass), A / B / C | annuler, rétablir, aide (?), réglages
-//    rangée          COLOR (OFF INFRA TERRA SUPRA), SATURATION (TAPE TUBE TRANS), HYPER MODE, suréchantillonnage
-//    centre          la visualisation des quatre bandes (séparations, niveaux, courbes gauche / droite, activité)
-//    bandes          FIRST … FOURTH : ON, SOLO, SATURATION, CURRENT, DRIFT, LEAN
-//    côtés           INPUT et OUTPUT : VU-mètre, gain, GAIN LINK, filtres HP / LP et leur pente
-//    bas             SURGICAL : BOXY et HARSH (fréquence, profondeur, Q), PRE / POST
+//  L'interface de VISION (1300 × 900 points, de 65 à 200 % sans déformation), disposée comme LACUNA, dans la DA de
+//  VOCALBOX :
+//    barre du haut   presets, IN (bypass), A / B / C | LINEAR PHASE, aide (?), réglages, annuler, rétablir
+//    sous la barre   INFRA, TERRA, SUPRA (un second clic éteint)
+//    centre          la fenêtre animée : FIRST … FOURTH (solo), séparations, niveaux, traces gauche / droite,
+//                    ON / OFF de chaque bande, HYPER MODE
+//    bandes          DRIFT et LEAN, CURRENT, SATURATION (FIRST et SECOND à gauche, THIRD et FOURTH à droite)
+//    milieu          TAPE / TUBE / TRANS, PRE · SURGICAL · POST, faders FREQ CUT (BOXY) et CUT FREQ (HARSH)
+//    côtés           IN et OUT : VU-mètre, filtres HP / LP, gain (boîte et potard), GAIN LINK
 //==============================================================================
 class VisionEditor : public juce::AudioProcessorEditor, private juce::Timer
 {
@@ -27,15 +29,14 @@ public:
     void resized() override;
     void mouseDown (const juce::MouseEvent&) override;
 
-    static constexpr int baseWidth = 1240, baseHeight = 800;
+    static constexpr int baseWidth = 1300, baseHeight = 900;
 
 private:
     struct BandControls
     {
         BandControls (VisionEditor&, int band);
-        ui::TextToggle on, solo;
-        ui::Knob sat, current, drift;
-        ui::Segments lean;
+        ui::SquareButton drift, lean;
+        ui::Knob current, sat;
     };
     /** Clic droit sur un potard : valeur d'usine, saisir une valeur, et pour un réglage de bande, l'appliquer aux
         quatre bandes. */
@@ -70,20 +71,19 @@ private:
     juce::Image background, logo;
     std::unique_ptr<juce::TooltipWindow> tooltips;
 
-    ui::Segments colorSeg, typeSeg, osSeg;
-    ui::Switch hyper;
-    ui::BandView view;
+    ui::ColorButtons colors;
+    ui::AnimationView view;
     std::unique_ptr<BandControls> bands[vision::numBands];
+    ui::SquareButton tape, tube, trans, pre, post;
+    ui::VFader boxyFreq, boxyCut, harshCut, harshFreq;
     // côtés
     ui::Meter inMeter, outMeter;
-    ui::Knob inGain, outGain, inHp, inLp, outHp, outLp;
-    ui::TextToggle link;
-    ui::Segments inSlope, outSlope;
-    // chirurgie
-    ui::TextToggle boxyOn, harshOn;
-    ui::Knob boxyFreq, boxyDepth, boxyQ, harshFreq, harshDepth, harshQ;
-    ui::Segments position;
+    ui::HSlider inHp, inLp, outHp, outLp;
+    ui::Readout inReadout, outReadout;
+    ui::Knob inGain, outGain;
+    ui::LinkButton link;
     // haut
+    ui::TextToggle linear;
     ui::IconButton undoButton, redoButton, helpButton, settingsButton;
 
     std::vector<std::unique_ptr<KnobMenu>> knobMenus;

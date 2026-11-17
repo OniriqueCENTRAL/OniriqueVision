@@ -6,12 +6,17 @@
 #include "../Params.h"
 
 //==============================================================================
-//  Les commandes propres à VISION, dans la DA ONIRIQUE :
-//    BandView     la visualisation des quatre bandes (séparations à tirer, niveau de chaque bande, courbes gauche et
-//                 droite calculées à partir de l'état réel du moteur, activité de chaque bande)
-//    Meter        VU-mètre stéréo d'entrée ou de sortie
-//    TextToggle   petit bouton lié à un paramètre (ON, S, LINK…)
-//    IconButton   réglages, aide
+//  Les commandes propres à VISION, dans la DA ONIRIQUE, disposées comme celles de LACUNA :
+//    AnimationView  la fenêtre animée : FIRST … FOURTH (solo), séparations et niveaux à tirer, traces gauche et droite
+//                   qui vivent avec CURRENT (l'état réel du moteur), DRIFT et LEAN, ON / OFF et HYPER MODE
+//    ColorButtons   INFRA, TERRA, SUPRA (un second clic éteint la couleur)
+//    SquareButton   DRIFT, LEAN (OFF → L → R), TAPE / TUBE / TRANS
+//    VFader         les faders de SURGICAL (fréquence, coupe)
+//    HSlider        les filtres d'entrée et de sortie (HP, LP)
+//    Readout        la valeur du gain, en boîte
+//    LinkButton     GAIN LINK (le maillon)
+//    Meter          VU-mètre stéréo d'entrée ou de sortie
+//    TextToggle, IconButton : LINEAR PHASE, aide, réglages, annuler, rétablir
 //==============================================================================
 namespace ui
 {
@@ -22,6 +27,29 @@ inline void setPlain (juce::RangedAudioParameter& p, float v)
     p.beginChangeGesture();
     p.setValueNotifyingHost (p.convertTo0to1 (v));
     p.endChangeGesture();
+}
+
+inline void toggleParam (juce::RangedAudioParameter& p)
+{
+    p.beginChangeGesture();
+    p.setValueNotifyingHost (p.getValue() > 0.5f ? 0.0f : 1.0f);
+    p.endChangeGesture();
+}
+
+/** Un rectangle « bouton » de la DA : verre, allumé en braise. */
+inline void lacunaBox (juce::Graphics& g, juce::Rectangle<float> r, float lit, float hover, float u)
+{
+    const float corner = 3.0f * u;
+    if (lit > 0.01f) onirique::da::softGlowRect (g, r, corner, accent.withAlpha (0.45f * lit), 6.0f * u);
+    g.setColour (juce::Colour (0xff0d0a0b));
+    g.fillRoundedRectangle (r, corner);
+    if (lit > 0.01f)
+    {
+        g.setGradientFill (juce::ColourGradient (accentLit.withAlpha (lit), r.getX(), r.getY(), accent.withAlpha (lit), r.getX(), r.getBottom(), false));
+        g.fillRoundedRectangle (r.reduced (1.0f * u), corner);
+    }
+    g.setColour (juce::Colours::white.withAlpha (0.10f + 0.10f * hover));
+    g.drawRoundedRectangle (r.reduced (0.5f), corner, 1.0f);
 }
 
 //==============================================================================
@@ -37,7 +65,6 @@ public:
         onClick = [this] { attachment.setValueAsCompleteGesture (on ? 0.0f : 1.0f); };
     }
     void setScale (float s) { scale = s; repaint(); }
-    bool isOn() const { return on; }
 
     void paintButton (juce::Graphics& g, bool over, bool down) override
     {
@@ -77,14 +104,12 @@ public:
         if (over) { g.setColour (juce::Colours::white.withAlpha (0.05f)); g.fillRoundedRectangle (r, r.getHeight() * 0.5f); }
         if (down) { g.setColour (juce::Colours::black.withAlpha (0.2f)); g.fillRoundedRectangle (r, r.getHeight() * 0.5f); }
         const auto c = r.getCentre();
-        g.setColour (lit > 0.0f ? bone : bone.withAlpha (0.8f));
-        if (! isEnabled()) g.setColour (dim);
+        g.setColour (! isEnabled() ? dim : lit > 0.0f ? bone : bone.withAlpha (0.8f));
         if (kind == help)
             ui::text (g, "?", r, font (Face::display, 13.0f * scale), lit > 0.0f ? bone : haze);
         else if (kind == undo || kind == redo)
         {
-            // une flèche courbe : vers la gauche (annuler) ou la droite (rétablir)
-            const float rr = r.getHeight() * 0.22f, dir = kind == undo ? -1.0f : 1.0f;
+            const float rr = r.getHeight() * 0.22f, dir = kind == undo ? 1.0f : -1.0f;
             juce::Path a;
             a.addCentredArc (c.x, c.y + rr * 0.3f, rr, rr, 0.0f, -dir * 1.9f, dir * 0.9f, true);
             g.strokePath (a, juce::PathStrokeType (1.6f * scale, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
@@ -95,7 +120,6 @@ public:
         }
         else
         {
-            // un engrenage : un anneau et huit dents
             const float rr = r.getHeight() * 0.22f;
             g.drawEllipse (juce::Rectangle<float> (2 * rr, 2 * rr).withCentre (c), 1.6f * scale);
             for (int i = 0; i < 8; ++i)
@@ -113,7 +137,292 @@ private:
 };
 
 //==============================================================================
-/** VU-mètre stéréo (crête et efficace), avec son échelle de +6 à -60 dB. */
+/** INFRA, TERRA, SUPRA : trois boutons ; un clic allume la couleur, un second clic sur la couleur allumée l'éteint. */
+class ColorButtons : public juce::Component, public juce::SettableTooltipClient
+{
+public:
+    explicit ColorButtons (juce::RangedAudioParameter& p)
+        : param (p), attachment (p, [this] (float v) { index = (int) std::lround (v); repaint(); })
+    {
+        attachment.sendInitialUpdate();
+        setMouseCursor (juce::MouseCursor::PointingHandCursor);
+    }
+    void setScale (float s) { scale = s; repaint(); }
+
+    void paint (juce::Graphics& g) override
+    {
+        const char* names[3] { "INFRA", "TERRA", "SUPRA" };
+        for (int i = 0; i < 3; ++i)
+        {
+            const auto r = cell (i);
+            lacunaBox (g, r, index == i + 1 ? 1.0f : 0.0f, hover == i ? 1.0f : 0.0f, scale);
+            ui::text (g, names[i], r, font (Face::display, 9.5f * scale, 0.16f), index == i + 1 ? bone : haze);
+        }
+    }
+    void mouseMove (const juce::MouseEvent& e) override { const int h = at (e.position); if (h != hover) { hover = h; repaint(); } }
+    void mouseExit (const juce::MouseEvent&) override { hover = -1; repaint(); }
+    void mouseDown (const juce::MouseEvent& e) override
+    {
+        const int i = at (e.position);
+        if (i < 0) return;
+        attachment.setValueAsCompleteGesture ((float) (index == i + 1 ? 0 : i + 1));
+    }
+
+private:
+    juce::Rectangle<float> cell (int i) const
+    {
+        const float gap = 10.0f * scale, w = (getWidth() - 2.0f * gap) / 3.0f;
+        return { (w + gap) * (float) i, 0.0f, w, (float) getHeight() };
+    }
+    int at (juce::Point<float> p) const { for (int i = 0; i < 3; ++i) if (cell (i).contains (p)) return i; return -1; }
+    juce::RangedAudioParameter& param;
+    juce::ParameterAttachment attachment;
+    int index = 0, hover = -1;
+    float scale = 1.0f;
+};
+
+//==============================================================================
+/** Bouton carré : marche / arrêt (DRIFT), un choix parmi plusieurs (TAPE / TUBE / TRANS), ou un cycle (LEAN). */
+class SquareButton : public juce::Component, public juce::SettableTooltipClient, private juce::Timer
+{
+public:
+    enum Mode { toggle, radio, cycle };
+    SquareButton (juce::RangedAudioParameter& p, Mode m, int radioIndex = 0, juce::StringArray cycleText = {})
+        : param (p), mode (m), choice (radioIndex), texts (std::move (cycleText)),
+          attachment (p, [this] (float v) { value = (int) std::lround (v); startTimerHz (60); })
+    {
+        attachment.sendInitialUpdate();
+        lit = target();
+        setMouseCursor (juce::MouseCursor::PointingHandCursor);
+        setTitle (p.getName (64));
+    }
+    void setScale (float s) { scale = s; repaint(); }
+
+    void paint (juce::Graphics& g) override
+    {
+        const auto r = getLocalBounds().toFloat().reduced (1.0f);
+        lacunaBox (g, r, lit * (isEnabled() ? 1.0f : 0.4f), hover ? 1.0f : 0.0f, scale);
+        if (mode == cycle && value > 0 && value < texts.size())
+            ui::text (g, texts[value], r, font (Face::display, 10.0f * scale), bone);
+    }
+    void mouseEnter (const juce::MouseEvent&) override { hover = true; repaint(); }
+    void mouseExit (const juce::MouseEvent&) override { hover = false; repaint(); }
+    void mouseDown (const juce::MouseEvent&) override
+    {
+        if (! isEnabled()) return;
+        if (mode == toggle) attachment.setValueAsCompleteGesture (value > 0 ? 0.0f : 1.0f);
+        else if (mode == radio) attachment.setValueAsCompleteGesture ((float) choice);
+        else attachment.setValueAsCompleteGesture ((float) ((value + 1) % std::max (2, texts.size())));
+    }
+
+private:
+    float target() const { return mode == radio ? (value == choice ? 1.0f : 0.0f) : (value > 0 ? 1.0f : 0.0f); }
+    void timerCallback() override
+    {
+        const float t = target();
+        lit += (t - lit) * 0.3f;
+        if (std::abs (t - lit) < 0.01f) { lit = t; stopTimer(); }
+        repaint();
+    }
+    juce::RangedAudioParameter& param;
+    Mode mode;
+    int choice;
+    juce::StringArray texts;
+    juce::ParameterAttachment attachment;
+    int value = 0;
+    float lit = 0.0f, scale = 1.0f;
+    bool hover = false;
+};
+
+//==============================================================================
+/** Fader vertical (SURGICAL) : rail, curseur clair au trait braise, graduations ; le haut et le bas de la course écrits
+    à côté. Glisser (Maj : fin), molette, double-clic : valeur d'usine. */
+class VFader : public juce::Component, public juce::SettableTooltipClient
+{
+public:
+    VFader (juce::RangedAudioParameter& p, juce::String topText, juce::String bottomText)
+        : param (p), top (std::move (topText)), bottom (std::move (bottomText)),
+          attachment (p, [this] (float) { repaint(); })
+    {
+        attachment.sendInitialUpdate();
+        setMouseCursor (juce::MouseCursor::UpDownResizeCursor);
+        setTitle (p.getName (64));
+    }
+    void setScale (float s) { scale = s; repaint(); }
+    /** la valeur 1 (haut) correspond-elle au haut du paramètre ? Pour la coupe, le haut = 0 dB (rien). */
+
+    void paint (juce::Graphics& g) override
+    {
+        const auto b = getLocalBounds().toFloat();
+        const auto rail = track();
+        g.setColour (juce::Colour (0xff060506));
+        g.fillRoundedRectangle (rail, rail.getWidth() * 0.5f);
+        g.setColour (juce::Colours::white.withAlpha (0.08f));
+        g.drawRoundedRectangle (rail, rail.getWidth() * 0.5f, 1.0f);
+        // graduations
+        for (int i = 0; i <= 10; ++i)
+        {
+            const float y = rail.getY() + rail.getHeight() * (float) i / 10.0f;
+            g.setColour (juce::Colours::white.withAlpha (i % 5 == 0 ? 0.25f : 0.10f));
+            g.fillRect (rail.getRight() + 4 * scale, y, (i % 5 == 0 ? 6.0f : 3.5f) * scale, 1.0f);
+        }
+        const float v = param.getValue();
+        const float y = rail.getBottom() - v * rail.getHeight();
+        const auto thumb = juce::Rectangle<float> (rail.getWidth() + 14 * scale, 12 * scale).withCentre ({ rail.getCentreX(), y });
+        onirique::da::softGlowRect (g, thumb, 2 * scale, juce::Colours::black.withAlpha (0.5f), 4 * scale, 2 * scale);
+        g.setGradientFill (juce::ColourGradient (bone, 0, thumb.getY(), juce::Colour (0xffbfb1b4), 0, thumb.getBottom(), false));
+        g.fillRoundedRectangle (thumb, 2 * scale);
+        g.setColour (accent);
+        g.fillRect (thumb.getX() + 2 * scale, thumb.getCentreY() - 1.0f * scale, thumb.getWidth() - 4 * scale, 2.0f * scale);
+        const auto f = font (Face::mono, 7.5f * scale);
+        text (g, top, juce::Rectangle<float> (b.getX(), b.getY(), b.getWidth(), 10 * scale), f, dim);
+        text (g, bottom, juce::Rectangle<float> (b.getX(), b.getBottom() - 10 * scale, b.getWidth(), 10 * scale), f, dim);
+        if (dragging || hovering)
+            text (g, param.getCurrentValueAsText(), juce::Rectangle<float> (b.getX() - 20 * scale, y - 22 * scale, b.getWidth() + 40 * scale, 12 * scale),
+                  font (Face::mono, 9.5f * scale), onirique::look::emberPink);
+    }
+    void mouseEnter (const juce::MouseEvent&) override { hovering = true; repaint(); }
+    void mouseExit (const juce::MouseEvent&) override { hovering = false; repaint(); }
+    void mouseDown (const juce::MouseEvent& e) override
+    {
+        dragging = true; startValue = param.getValue(); startY = e.position.y;
+        attachment.beginGesture();
+    }
+    void mouseDrag (const juce::MouseEvent& e) override
+    {
+        const float range = track().getHeight() * (e.mods.isShiftDown() ? 4.0f : 1.0f);
+        attachment.setValueAsPartOfGesture (param.convertFrom0to1 (juce::jlimit (0.0f, 1.0f, startValue - (e.position.y - startY) / range)));
+    }
+    void mouseUp (const juce::MouseEvent&) override { dragging = false; attachment.endGesture(); repaint(); }
+    void mouseDoubleClick (const juce::MouseEvent&) override { attachment.setValueAsCompleteGesture (param.convertFrom0to1 (param.getDefaultValue())); }
+    void mouseWheelMove (const juce::MouseEvent&, const juce::MouseWheelDetails& w) override
+    {
+        attachment.setValueAsCompleteGesture (param.convertFrom0to1 (juce::jlimit (0.0f, 1.0f, param.getValue() + (w.deltaY > 0 ? 0.02f : -0.02f))));
+    }
+
+private:
+    juce::Rectangle<float> track() const
+    {
+        const auto b = getLocalBounds().toFloat();
+        return juce::Rectangle<float> (b.getCentreX() - 3 * scale, b.getY() + 16 * scale, 6 * scale, b.getHeight() - 32 * scale);
+    }
+    juce::RangedAudioParameter& param;
+    juce::String top, bottom;
+    juce::ParameterAttachment attachment;
+    float scale = 1.0f, startValue = 0.0f, startY = 0.0f;
+    bool dragging = false, hovering = false;
+};
+
+//==============================================================================
+/** Petit curseur horizontal (filtres d'entrée et de sortie) : nom à gauche, valeur à droite, rail et curseur. */
+class HSlider : public juce::Component, public juce::SettableTooltipClient
+{
+public:
+    HSlider (juce::RangedAudioParameter& p, juce::String name)
+        : param (p), label (std::move (name)), attachment (p, [this] (float) { repaint(); })
+    {
+        attachment.sendInitialUpdate();
+        setMouseCursor (juce::MouseCursor::LeftRightResizeCursor);
+        setTitle (p.getName (64));
+    }
+    void setScale (float s) { scale = s; repaint(); }
+
+    void paint (juce::Graphics& g) override
+    {
+        const auto b = getLocalBounds().toFloat();
+        const auto f = font (Face::body, 8.5f * scale, 0.14f);
+        text (g, label, b.withHeight (11 * scale), f, haze, juce::Justification::centredLeft);
+        text (g, param.getCurrentValueAsText(), b.withHeight (11 * scale), font (Face::mono, 8.5f * scale),
+              dragging || hovering ? onirique::look::emberPink : bone, juce::Justification::centredRight);
+        const auto rail = track();
+        g.setColour (juce::Colour (0xff060506));
+        g.fillRoundedRectangle (rail, rail.getHeight() * 0.5f);
+        const float x = rail.getX() + param.getValue() * rail.getWidth();
+        const bool off = param.getCurrentValueAsText() == "OFF";
+        g.setColour (off ? dim : accent);
+        g.fillRoundedRectangle (juce::Rectangle<float> (8 * scale, 10 * scale).withCentre ({ x, rail.getCentreY() }), 2 * scale);
+    }
+    void mouseEnter (const juce::MouseEvent&) override { hovering = true; repaint(); }
+    void mouseExit (const juce::MouseEvent&) override { hovering = false; repaint(); }
+    void mouseDown (const juce::MouseEvent& e) override { dragging = true; startValue = param.getValue(); startX = e.position.x; attachment.beginGesture(); }
+    void mouseDrag (const juce::MouseEvent& e) override
+    {
+        const float range = track().getWidth() * (e.mods.isShiftDown() ? 4.0f : 1.0f);
+        attachment.setValueAsPartOfGesture (param.convertFrom0to1 (juce::jlimit (0.0f, 1.0f, startValue + (e.position.x - startX) / range)));
+    }
+    void mouseUp (const juce::MouseEvent&) override { dragging = false; attachment.endGesture(); repaint(); }
+    void mouseDoubleClick (const juce::MouseEvent&) override { attachment.setValueAsCompleteGesture (param.convertFrom0to1 (param.getDefaultValue())); }
+
+private:
+    juce::Rectangle<float> track() const
+    {
+        const auto b = getLocalBounds().toFloat();
+        return { b.getX() + 2 * scale, b.getBottom() - 9 * scale, b.getWidth() - 4 * scale, 4 * scale };
+    }
+    juce::RangedAudioParameter& param;
+    juce::String label;
+    juce::ParameterAttachment attachment;
+    float scale = 1.0f, startValue = 0.0f, startX = 0.0f;
+    bool dragging = false, hovering = false;
+};
+
+//==============================================================================
+/** La valeur d'un paramètre dans une boîte (le gain). */
+class Readout : public juce::Component
+{
+public:
+    explicit Readout (juce::RangedAudioParameter& p) : param (p), attachment (p, [this] (float) { repaint(); }) { attachment.sendInitialUpdate(); }
+    void setScale (float s) { scale = s; repaint(); }
+    void paint (juce::Graphics& g) override
+    {
+        const auto r = getLocalBounds().toFloat().reduced (1.0f);
+        g.setColour (juce::Colour (0xff0b0809));
+        g.fillRoundedRectangle (r, 4 * scale);
+        g.setColour (juce::Colours::white.withAlpha (0.08f));
+        g.drawRoundedRectangle (r, 4 * scale, 1.0f);
+        const float v = plainOf (param);
+        text (g, (std::abs (v) < 0.005f ? juce::String ("0.00") : juce::String (v, 2)) + " dB", r, font (Face::mono, 10.5f * scale), bone);
+    }
+private:
+    juce::RangedAudioParameter& param;
+    juce::ParameterAttachment attachment;
+    float scale = 1.0f;
+};
+
+//==============================================================================
+/** GAIN LINK : un maillon, allumé quand l'entrée et la sortie sont liées. */
+class LinkButton : public juce::Component, public juce::SettableTooltipClient
+{
+public:
+    explicit LinkButton (juce::RangedAudioParameter& p) : attachment (p, [this] (float v) { on = v > 0.5f; repaint(); })
+    {
+        attachment.sendInitialUpdate();
+        setMouseCursor (juce::MouseCursor::PointingHandCursor);
+        setTitle (p.getName (64));
+    }
+    void setScale (float s) { scale = s; repaint(); }
+    void paint (juce::Graphics& g) override
+    {
+        const auto c = getLocalBounds().toFloat().getCentre();
+        const float w = 9 * scale, h = 6 * scale;
+        juce::Path p;
+        p.addRoundedRectangle (c.x - w - 1 * scale, c.y - h * 0.5f, w + 3 * scale, h, h * 0.5f);
+        p.addRoundedRectangle (c.x - 2 * scale, c.y - h * 0.5f, w + 3 * scale, h, h * 0.5f);
+        if (on) onirique::da::softGlow (g, p, accent.withAlpha (0.7f), 5 * scale);
+        g.setColour (on ? accentLit : hover ? bone : haze);
+        g.strokePath (p, juce::PathStrokeType (1.6f * scale));
+    }
+    void mouseEnter (const juce::MouseEvent&) override { hover = true; repaint(); }
+    void mouseExit (const juce::MouseEvent&) override { hover = false; repaint(); }
+    void mouseDown (const juce::MouseEvent&) override { attachment.setValueAsCompleteGesture (on ? 0.0f : 1.0f); }
+private:
+    juce::ParameterAttachment attachment;
+    bool on = false, hover = false;
+    float scale = 1.0f;
+};
+
+//==============================================================================
+/** VU-mètre stéréo (crête et efficace), avec son échelle de +12 dB à -inf. */
 class Meter : public juce::Component, private juce::Timer
 {
 public:
@@ -122,40 +431,44 @@ public:
 
     void paint (juce::Graphics& g) override
     {
+        using R = juce::Rectangle<float>;
         const auto b = getLocalBounds().toFloat();
-        const float scaleW = 26.0f * scale;
-        auto bars = b.withTrimmedLeft (output ? 0.0f : scaleW).withTrimmedRight (output ? scaleW : 0.0f);
-        const float top = b.getY() + 4.0f * scale, bottom = b.getBottom() - 4.0f * scale;
-        auto yOf = [&] (float db) { return juce::jmap (juce::jlimit (-60.0f, 6.0f, db), 6.0f, -60.0f, top, bottom); };
-        // échelle
+        const float scaleW = 28.0f * scale;
+        auto bars = b.withTrimmedLeft (output ? 0.0f : scaleW).withTrimmedRight (output ? scaleW : 0.0f).reduced (8 * scale, 0);
+        const float top = b.getY() + 6.0f * scale, bottom = b.getBottom() - 6.0f * scale;
+        auto yOf = [&] (float db) { return db <= -60.0f ? bottom : juce::jmap (juce::jlimit (-42.0f, 12.0f, db), 12.0f, -42.0f, top, bottom - 10 * scale); };
         const auto f = font (Face::mono, 8.5f * scale);
-        for (float db : { 6.0f, 0.0f, -6.0f, -12.0f, -18.0f, -24.0f, -36.0f, -48.0f, -60.0f })
+        for (float db : { 12.0f, 6.0f, 0.0f, -6.0f, -12.0f, -18.0f, -24.0f, -30.0f, -36.0f, -60.0f })
         {
             const float y = yOf (db);
             const auto label = R (output ? b.getRight() - scaleW : b.getX(), y - 6 * scale, scaleW - 4 * scale, 12 * scale);
-            text (g, db > 0 ? "+" + juce::String ((int) db) : juce::String ((int) db), label, f, db == 0.0f ? bone : dim,
-                  output ? juce::Justification::centredRight : juce::Justification::centredLeft);
+            const juce::String t = db <= -60.0f ? juce::String ("-inf") : db > 0 ? "+" + juce::String ((int) db) : juce::String ((int) db);
+            text (g, t, label, f, db == 0.0f ? bone : dim, output ? juce::Justification::centredRight : juce::Justification::centredLeft);
+            // graduations fines entre l'échelle et les barres
+            g.setColour (juce::Colours::white.withAlpha (0.12f));
+            g.fillRect (output ? bars.getRight() + 2 * scale : bars.getX() - 6 * scale, y, 4 * scale, 1.0f);
         }
-        const float w = (bars.getWidth() - 6.0f * scale) / 2.0f;
+        const float w = (bars.getWidth() - 8.0f * scale) / 2.0f;
         for (int c = 0; c < 2; ++c)
         {
-            const auto well = R (bars.getX() + (float) c * (w + 6.0f * scale), top, w, bottom - top);
+            const auto well = R (bars.getX() + (float) c * (w + 8.0f * scale), top, w, bottom - top);
             g.setColour (juce::Colour (0xff050405));
             g.fillRoundedRectangle (well, 3.0f * scale);
+            g.setColour (juce::Colours::white.withAlpha (0.06f));
+            g.drawRoundedRectangle (well, 3.0f * scale, 1.0f);
             const float yr = yOf (rmsDb[c]), yp = yOf (peakDb[c]);
-            juce::ColourGradient grad (accent.withAlpha (0.95f), 0, top, accent.withAlpha (0.45f), 0, bottom, false);
-            grad.addColour (juce::jmap (yOf (0.0f), top, bottom, 0.0f, 1.0f), onirique::look::emberPink);
+            juce::ColourGradient grad (accentLit, 0, top, accent.withAlpha (0.55f), 0, bottom, false);
             g.setGradientFill (grad);
-            g.fillRoundedRectangle (well.withTop (yr).reduced (1.5f * scale, 0.0f), 2.0f * scale);
-            g.setColour (bone.withAlpha (0.9f));
-            g.fillRect (well.getX() + 1.5f * scale, yp - 1.0f * scale, well.getWidth() - 3.0f * scale, 2.0f * scale);
+            g.fillRoundedRectangle (well.withTop (yr).reduced (2.0f * scale, 1.0f), 2.0f * scale);
+            if (peakDb[c] > -60.0f)
+            {
+                g.setColour (bone.withAlpha (0.9f));
+                g.fillRect (well.getX() + 2.0f * scale, yp - 1.0f * scale, well.getWidth() - 4.0f * scale, 2.0f * scale);
+            }
         }
-        g.setColour (juce::Colours::white.withAlpha (0.12f));
-        g.fillRect (bars.getX(), yOf (0.0f), bars.getWidth(), 1.0f);
     }
 
 private:
-    using R = juce::Rectangle<float>;
     void timerCallback() override
     {
         for (int c = 0; c < 2; ++c)
@@ -173,11 +486,15 @@ private:
 };
 
 //==============================================================================
-/** La visualisation des quatre bandes. */
-class BandView : public juce::Component, public juce::SettableTooltipClient, private juce::Timer
+/** La fenêtre animée. Les deux traces (gauche en haut, droite en bas) dessinent ce que CURRENT, DRIFT et LEAN font en
+    ce moment à chaque canal : la courbe des cloches de CURRENT publiées par le moteur (agrandie pour se voir), et
+    l'écart gauche / droite que donnent DRIFT, LEAN et l'ampleur de CURRENT. Les bandes passent l'une dans l'autre comme
+    la séparation Linkwitz-Riley. Les poignées règlent le niveau de chaque bande, les ronds en haut les séparations ;
+    FIRST … FOURTH mettent une bande en solo ; ON / OFF et HYPER MODE en bas. */
+class AnimationView : public juce::Component, public juce::SettableTooltipClient, private juce::Timer
 {
 public:
-    BandView (juce::AudioProcessorValueTreeState& s, vision::Meters& m) : state (s), meters (m)
+    AnimationView (juce::AudioProcessorValueTreeState& s, vision::Meters& m) : meters (m)
     {
         for (int i = 0; i < 3; ++i) xo[i] = s.getParameter (params::crossover (i));
         for (int b = 0; b < vision::numBands; ++b)
@@ -188,164 +505,152 @@ public:
             current[b] = s.getParameter (params::bandCurrent (b));
             drift[b] = s.getParameter (params::bandDrift (b));
             lean[b] = s.getParameter (params::bandLean (b));
-            sat[b] = s.getParameter (params::bandSat (b));
         }
-        startTimerHz (30);
+        hyper = s.getParameter (params::hyper);
+        startTimerHz (40);
     }
 
     void setScale (float s) { scale = s; repaint(); }
-    int getSelected() const { return selected; }
-    std::function<void (int)> onSelect;
+    /** les centres des colonnes de bandes, en x local (les ON / OFF s'alignent sur elles), et celui de HYPER MODE */
+    void setColumns (std::array<float, 4> centres, float hyperCentre) { columns = centres; hyperX = hyperCentre; repaint(); }
 
     void paint (juce::Graphics& g) override
     {
-        const auto plot = plotArea();
         const float u = scale;
+        const auto plot = plotArea();
         double x[3]; crossovers (x);
-
-        // grille
-        g.setColour (juce::Colours::white.withAlpha (0.045f));
-        for (float f : { 50.0f, 100.0f, 200.0f, 500.0f, 1000.0f, 2000.0f, 5000.0f, 10000.0f })
-            g.fillRect (xOf (f), plot.getY(), 1.0f, plot.getHeight());
-        for (float db : { -12.0f, -6.0f, 6.0f, 12.0f })
-            g.fillRect (plot.getX(), yOf (db), plot.getWidth(), 1.0f);
-        g.setColour (juce::Colours::white.withAlpha (0.10f));
-        g.fillRect (plot.getX(), yOf (0.0f), plot.getWidth(), 1.0f);
-        const auto lf = font (Face::mono, 8.5f * u);
-        for (float f : { 50.0f, 100.0f, 200.0f, 500.0f, 1000.0f, 2000.0f, 5000.0f, 10000.0f })
-            text (g, f >= 1000.0f ? juce::String ((int) (f / 1000.0f)) + "k" : juce::String ((int) f),
-                  R (xOf (f) - 20 * u, plot.getBottom() + 3 * u, 40 * u, 12 * u), lf, dim);
-        for (float db : { -12.0f, 0.0f, 12.0f })
-            text (g, db > 0 ? "+" + juce::String ((int) db) : juce::String ((int) db), R (plot.getX() + 3 * u, yOf (db) - 13 * u, 30 * u, 12 * u),
-                  lf, dim, juce::Justification::centredLeft);
-
-        // les bandes : zone, nom, activité
         bool anySolo = false;
         for (auto* s : solo) anySolo |= s->getValue() > 0.5f;
-        for (int b = 0; b < vision::numBands; ++b)
-        {
-            double lo, hi; vision::bandEdges (x, b, lo, hi);
-            const float x0 = b == 0 ? plot.getX() : xOf ((float) lo), x1 = b == 3 ? plot.getRight() : xOf ((float) hi);
-            const auto zone = R (x0, plot.getY(), x1 - x0, plot.getHeight());
-            const bool heard = ! anySolo || solo[b]->getValue() > 0.5f;
-            const bool isOn = on[b]->getValue() > 0.5f;
-            if (b == selected)
-            {
-                g.setGradientFill (juce::ColourGradient (accent.withAlpha (0.10f), 0, zone.getY(), accent.withAlpha (0.0f), 0, zone.getBottom(), false));
-                g.fillRect (zone);
-            }
-            if (! heard)
-            {
-                g.setColour (juce::Colours::black.withAlpha (0.45f));
-                g.fillRect (zone);
-            }
-            // activité : gauche et droite, en colonnes douces depuis le bas
-            for (int c = 0; c < 2; ++c)
-            {
-                const float db = juce::Decibels::gainToDecibels (activity[b][c], -70.0f);
-                const float h = juce::jlimit (0.0f, 1.0f, (db + 60.0f) / 60.0f) * plot.getHeight() * 0.5f;
-                const float w = std::max (2.0f, (x1 - x0) * 0.5f);
-                const auto col = R (x0 + (float) c * w, plot.getBottom() - h, w, h);
-                g.setGradientFill (juce::ColourGradient ((c == 0 ? accent : side).withAlpha (heard ? 0.16f : 0.05f), 0, col.getBottom(),
-                                                         (c == 0 ? accent : side).withAlpha (0.0f), 0, col.getY(), false));
-                g.fillRect (col);
-            }
-            const juce::String name = params::bandNames[b];
-            text (g, name, R (x0, getLocalBounds().toFloat().getY() + 2 * u, x1 - x0, 16 * u), font (Face::display, 9.5f * u, 0.18f),
-                  b == selected ? bone : isOn ? haze : dim);
-        }
 
-        // les courbes gauche et droite
-        juce::Path pl, pr;
-        const int nPts = std::max (60, (int) (plot.getWidth() / (3.0f * u)));
-        bool different = false;
-        for (int i = 0; i <= nPts; ++i)
-        {
-            const float px = plot.getX() + plot.getWidth() * (float) i / (float) nPts;
-            const double f = freqOf (px);
-            double l, r; response (f, x, l, r);
-            const float yl = yOf ((float) vision::gainToDb (l)), yr = yOf ((float) vision::gainToDb (r));
-            different |= std::abs (yl - yr) > 0.5f;
-            if (i == 0) { pl.startNewSubPath (px, yl); pr.startNewSubPath (px, yr); }
-            else { pl.lineTo (px, yl); pr.lineTo (px, yr); }
-        }
-        g.saveState();
-        g.reduceClipRegion (plot.toNearestInt());
-        if (different)
-        {
-            onirique::da::softGlow (g, pr, side.withAlpha (0.35f), 7.0f * u);
-            g.setColour (side.withAlpha (0.9f));
-            g.strokePath (pr, juce::PathStrokeType (1.6f * u, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
-        }
-        onirique::da::softGlow (g, pl, accent.withAlpha (0.55f), 8.0f * u);
-        g.setColour (different ? accentLit : bone);
-        g.strokePath (pl, juce::PathStrokeType (1.9f * u, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
-        g.restoreState();
-
-        // séparations : trait et poignée en haut
+        // séparations : trait fin et rond en haut
         for (int i = 0; i < 3; ++i)
         {
             const float px = xOf ((float) x[i]);
             const bool hot = hoverXo == i || dragXo == i;
-            g.setColour (juce::Colours::white.withAlpha (hot ? 0.35f : 0.16f));
-            g.fillRect (px - 0.5f * u, plot.getY(), 1.0f * u, plot.getHeight());
-            const auto knob = R (11 * u, 11 * u).withCentre ({ px, plot.getY() + 1 * u });
-            g.setColour (hot ? accentLit : haze);
-            g.fillEllipse (knob);
-            g.setColour (onirique::da::night);
-            g.fillEllipse (knob.reduced (3.5f * u));
+            g.setColour (juce::Colours::white.withAlpha (hot ? 0.22f : 0.09f));
+            g.fillRect (px - 0.5f, plot.getY() + 8 * u, 1.0f, plot.getHeight() - 8 * u);
+            const auto dot = juce::Rectangle<float> (9 * u, 9 * u).withCentre ({ px, plot.getY() + 8 * u });
+            g.setColour (hot ? accentLit : juce::Colour (0xff3a3335));
+            g.fillEllipse (dot);
             if (hot)
-                text (g, params::hzText ((float) x[i]), R (px - 40 * u, plot.getY() + 8 * u, 80 * u, 14 * u), font (Face::mono, 10 * u), bone);
+                text (g, params::hzText ((float) x[i]), juce::Rectangle<float> (px - 40 * u, plot.getY() + 14 * u, 80 * u, 13 * u), font (Face::mono, 9.5f * u), bone);
         }
+
+        // FIRST … FOURTH : au centre de leur bande, allumés en solo
+        for (int b = 0; b < vision::numBands; ++b)
+        {
+            const auto r = labelArea (b, x);
+            const bool soloed = solo[b]->getValue() > 0.5f;
+            if (soloed) onirique::da::softGlowRect (g, r.reduced (6 * u, 2 * u), 3 * u, accent.withAlpha (0.35f), 6 * u);
+            text (g, params::bandNames[b], r, font (Face::display, 8.5f * u, 0.22f),
+                  soloed ? accentLit : hoverLabel == b ? bone : (anySolo ? dim : haze));
+        }
+
+        // les traces
+        const float cy = plot.getCentreY();
+        const int nPts = std::max (80, (int) (plot.getWidth() / (2.5f * u)));
+        juce::Path tr[2];
+        for (int i = 0; i <= nPts; ++i)
+        {
+            const float px = plot.getX() + 18 * u + (plot.getWidth() - 36 * u) * (float) i / (float) nPts;
+            const double f = freqOf (px);
+            double y[2];
+            traces (f, x, anySolo, y);
+            for (int c = 0; c < 2; ++c)
+            {
+                const float py = juce::jlimit (plot.getY() + 4 * u, plot.getBottom() - 4 * u, cy + (float) y[c] * u);
+                if (i == 0) tr[c].startNewSubPath (px, py); else tr[c].lineTo (px, py);
+            }
+        }
+        g.saveState();
+        g.reduceClipRegion (plot.toNearestInt());
+        for (int c = 1; c >= 0; --c)
+        {
+            onirique::da::softGlow (g, tr[c], accent.withAlpha (0.55f), 7 * u);
+            g.setColour (juce::Colours::white.withAlpha (0.35f));
+            g.strokePath (tr[c], juce::PathStrokeType (3.2f * u, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+            g.setColour (c == 0 ? bone : juce::Colour (0xffe6dadc));
+            g.strokePath (tr[c], juce::PathStrokeType (1.5f * u, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+        }
+        g.restoreState();
 
         // poignées de niveau
         for (int b = 0; b < vision::numBands; ++b)
         {
             const auto h = handleArea (b, x);
             const bool hot = hoverBand == b || dragBand == b;
-            const bool isOn = on[b]->getValue() > 0.5f;
-            onirique::da::glass (g, h, h.getHeight() * 0.5f, u, true);
-            onirique::da::seg (g, h, isOn ? (hot ? 1.0f : 0.75f) : 0.0f, hot ? 1.0f : 0.0f, u, h.getHeight() * 0.5f);
+            const float lv = plainOf (*level[b]);
+            const float glow = hot ? 1.0f : std::abs (lv) > 0.05f ? 0.8f : 0.45f;
+            onirique::da::softGlowRect (g, h, 2 * u, accent.withAlpha (0.55f * glow), 7 * u);
+            g.setColour (juce::Colour (0xff120c0d));
+            g.fillRoundedRectangle (h, 2 * u);
+            g.setColour (accent.withAlpha (0.6f + 0.4f * glow));
+            g.drawRoundedRectangle (h, 2 * u, 1.4f * u);
             if (hot)
+                text (g, params::dbText (lv), juce::Rectangle<float> (h.getCentreX() - 40 * u, h.getY() - 17 * u, 80 * u, 13 * u), font (Face::mono, 9.5f * u), bone);
+        }
+
+        // ON / OFF sous chaque colonne, HYPER MODE au milieu
+        for (int b = 0; b < vision::numBands; ++b)
+        {
+            const auto pill = pillArea (b);
+            const float lit = on[b]->getValue() > 0.5f ? 1.0f : 0.0f;
+            if (lit > 0) onirique::da::softGlowRect (g, pill, pill.getHeight() * 0.5f, accent.withAlpha (0.5f), 6 * u);
+            g.setColour (lit > 0 ? accent : juce::Colour (0xff2a2426));
+            g.fillRoundedRectangle (pill, pill.getHeight() * 0.5f);
+            if (lit > 0)
             {
-                const float v = plainOf (*level[b]);
-                text (g, params::dbText (v), R (h.getCentreX() - 40 * u, h.getY() - 18 * u, 80 * u, 14 * u), font (Face::mono, 10 * u), bone);
+                g.setGradientFill (juce::ColourGradient (accentLit, 0, pill.getY(), accent, 0, pill.getBottom(), false));
+                g.fillRoundedRectangle (pill.reduced (1 * u), pill.getHeight() * 0.5f);
             }
+            text (g, "ON / OFF", juce::Rectangle<float> (pill.getCentreX() - 40 * u, pill.getBottom() + 4 * u, 80 * u, 10 * u),
+                  font (Face::body, 7.5f * u, 0.14f), haze);
+        }
+        {
+            const auto hr = hyperArea();
+            const bool hon = hyper->getValue() > 0.5f;
+            const auto dot = juce::Point<float> (hr.getX() + 4 * u, hr.getCentreY());
+            if (hon) onirique::da::softGlowRect (g, juce::Rectangle<float> (6 * u, 6 * u).withCentre (dot), 3 * u, accent, 6 * u);
+            g.setColour (hon ? accentLit : bone.withAlpha (0.7f));
+            g.fillEllipse (juce::Rectangle<float> (5 * u, 5 * u).withCentre (dot));
+            text (g, "HYPER MODE", hr.withTrimmedLeft (12 * u), font (Face::body, 8.0f * u, 0.16f), hon ? accentLit : haze, juce::Justification::centredLeft);
         }
     }
 
     void mouseMove (const juce::MouseEvent& e) override
     {
         double x[3]; crossovers (x);
-        const int hb = handleAt (e.position, x), hx = hb >= 0 ? -1 : crossoverAt (e.position, x);
-        if (hb != hoverBand || hx != hoverXo) { hoverBand = hb; hoverXo = hx; repaint(); }
+        const int hb = handleAt (e.position, x), hx = hb >= 0 ? -1 : crossoverAt (e.position, x), hl = labelAt (e.position, x);
+        if (hb != hoverBand || hx != hoverXo || hl != hoverLabel) { hoverBand = hb; hoverXo = hx; hoverLabel = hl; repaint(); }
+        const bool clickable = hl >= 0 || pillAt (e.position) >= 0 || hyperArea().contains (e.position);
         setMouseCursor (hb >= 0 ? juce::MouseCursor::UpDownResizeCursor : hx >= 0 ? juce::MouseCursor::LeftRightResizeCursor
-                                                                            : juce::MouseCursor::PointingHandCursor);
+                                                                            : clickable ? juce::MouseCursor::PointingHandCursor : juce::MouseCursor::NormalCursor);
     }
-    void mouseExit (const juce::MouseEvent&) override { hoverBand = hoverXo = -1; repaint(); }
+    void mouseExit (const juce::MouseEvent&) override { hoverBand = hoverXo = hoverLabel = -1; repaint(); }
 
     void mouseDown (const juce::MouseEvent& e) override
     {
         double x[3]; crossovers (x);
         dragBand = handleAt (e.position, x);
         dragXo = dragBand >= 0 ? -1 : crossoverAt (e.position, x);
-        if (dragBand >= 0) { level[dragBand]->beginChangeGesture(); startLevel = plainOf (*level[dragBand]); startY = e.position.y; select (dragBand); }
-        else if (dragXo >= 0) xo[dragXo]->beginChangeGesture();
-        else select (bandAt (e.position.x, x));
+        if (dragBand >= 0) { level[dragBand]->beginChangeGesture(); startLevel = plainOf (*level[dragBand]); startY = e.position.y; return; }
+        if (dragXo >= 0) { xo[dragXo]->beginChangeGesture(); return; }
+        if (const int l = labelAt (e.position, x); l >= 0) { toggleParam (*solo[l]); return; }
+        if (const int p = pillAt (e.position); p >= 0) { toggleParam (*on[p]); return; }
+        if (hyperArea().contains (e.position)) toggleParam (*hyper);
     }
 
     void mouseDrag (const juce::MouseEvent& e) override
     {
         if (dragBand >= 0)
         {
-            const float perDb = plotArea().getHeight() / 30.0f * (e.mods.isShiftDown() ? 4.0f : 1.0f);
+            const float perDb = (plotArea().getHeight() - 52 * scale) / 36.0f * (e.mods.isShiftDown() ? 4.0f : 1.0f);
             const float v = juce::jlimit (-18.0f, 12.0f, startLevel - (e.position.y - startY) / perDb);
             level[dragBand]->setValueNotifyingHost (level[dragBand]->convertTo0to1 (v));
         }
         else if (dragXo >= 0)
         {
             double x[3]; crossovers (x);
-            // une séparation ne passe jamais l'autre : un tiers d'octave d'écart au moins
             double f = freqOf (e.position.x);
             if (dragXo > 0) f = std::max (f, x[dragXo - 1] * 1.26);
             if (dragXo < 2) f = std::min (f, x[dragXo + 1] / 1.26);
@@ -372,35 +677,21 @@ public:
 
     void mouseWheelMove (const juce::MouseEvent& e, const juce::MouseWheelDetails& w) override
     {
+        if (! plotArea().contains (e.position)) return;
         double x[3]; crossovers (x);
         const int b = bandAt (e.position.x, x);
-        const float v = juce::jlimit (-18.0f, 12.0f, plainOf (*level[b]) + (w.deltaY > 0 ? 0.5f : -0.5f));
-        setPlain (*level[b], v);
+        setPlain (*level[b], juce::jlimit (-18.0f, 12.0f, plainOf (*level[b]) + (w.deltaY > 0 ? 0.5f : -0.5f)));
     }
 
 private:
     using R = juce::Rectangle<float>;
 
-    void timerCallback() override
-    {
-        for (int b = 0; b < vision::numBands; ++b)
-            for (int c = 0; c < 2; ++c)
-            {
-                const float v = meters.bandRms[b][c].load();
-                activity[b][c] = v > activity[b][c] ? v : activity[b][c] * 0.88f + v * 0.12f;
-            }
-        repaint();
-    }
-
-    void select (int b)
-    {
-        if (b != selected) { selected = b; repaint(); if (onSelect) onSelect (b); }
-    }
+    void timerCallback() override { repaint(); }
 
     R plotArea() const
     {
         const float u = scale;
-        return getLocalBounds().toFloat().withTrimmedTop (22 * u).withTrimmedBottom (18 * u).reduced (10 * u, 0);
+        return getLocalBounds().toFloat().withTrimmedTop (24 * u).withTrimmedBottom (54 * u).reduced (8 * u, 0);
     }
     float xOf (float f) const
     {
@@ -412,10 +703,12 @@ private:
         const auto p = plotArea();
         return 20.0 * std::pow (1000.0, juce::jlimit (0.0, 1.0, (double) ((px - p.getX()) / p.getWidth())));
     }
-    float yOf (float db) const
+    /** niveau de bande (-18 … +12 dB) → hauteur des poignées */
+    float yOfLevel (float db) const
     {
         const auto p = plotArea();
-        return juce::jmap (juce::jlimit (-18.0f, 15.0f, db), 15.0f, -18.0f, p.getY() + 6 * scale, p.getBottom() - 4 * scale);
+        // 0 dB au milieu, sur les traces ; ±18 dB aux bords
+        return juce::jmap (juce::jlimit (-18.0f, 12.0f, db), 18.0f, -18.0f, p.getY() + 26 * scale, p.getBottom() - 26 * scale);
     }
 
     void crossovers (double x[3]) const
@@ -424,12 +717,25 @@ private:
         vision::orderCrossovers (x);
     }
 
-    R handleArea (int b, const double x[3]) const
+    float bandCentre (int b, const double x[3]) const
     {
         double lo, hi; vision::bandEdges (x, b, lo, hi);
-        const float cx = xOf ((float) std::sqrt (std::max (lo, 25.0) * std::min (hi, 18000.0)));
-        return R (30 * scale, 12 * scale).withCentre ({ cx, yOf (plainOf (*level[b])) });
+        return xOf ((float) std::sqrt (std::max (lo, 25.0) * std::min (hi, 18000.0)));
     }
+    R handleArea (int b, const double x[3]) const
+    {
+        return R (30 * scale, 10 * scale).withCentre ({ bandCentre (b, x), yOfLevel (plainOf (*level[b])) });
+    }
+    R labelArea (int b, const double x[3]) const
+    {
+        return R (90 * scale, 16 * scale).withCentre ({ bandCentre (b, x), 12 * scale });
+    }
+    R pillArea (int b) const
+    {
+        return R (40 * scale, 13 * scale).withCentre ({ columns[(size_t) b], (float) getHeight() - 36 * scale });
+    }
+    R hyperArea() const { return R (92 * scale, 16 * scale).withCentre ({ hyperX, (float) getHeight() - 36 * scale }); }
+
     int handleAt (juce::Point<float> p, const double x[3]) const
     {
         for (int b = 0; b < vision::numBands; ++b) if (handleArea (b, x).expanded (6 * scale).contains (p)) return b;
@@ -437,9 +743,20 @@ private:
     }
     int crossoverAt (juce::Point<float> p, const double x[3]) const
     {
-        int best = -1; float bestD = 8.0f * scale;
+        if (! plotArea().contains (p)) return -1;
+        int best = -1; float bestD = 7.0f * scale;
         for (int i = 0; i < 3; ++i) { const float d = std::abs (p.x - xOf ((float) x[i])); if (d < bestD) { bestD = d; best = i; } }
         return best;
+    }
+    int labelAt (juce::Point<float> p, const double x[3]) const
+    {
+        for (int b = 0; b < vision::numBands; ++b) if (labelArea (b, x).contains (p)) return b;
+        return -1;
+    }
+    int pillAt (juce::Point<float> p) const
+    {
+        for (int b = 0; b < vision::numBands; ++b) if (pillArea (b).expanded (6 * scale).contains (p)) return b;
+        return -1;
     }
     int bandAt (float px, const double x[3]) const
     {
@@ -447,9 +764,9 @@ private:
         return f < x[0] ? 0 : f < x[1] ? 1 : f < x[2] ? 2 : 3;
     }
 
-    /** Réponse gauche et droite au point f, d'après l'état réel du moteur (cloches de CURRENT publiées par le thread
-        audio, DRIFT, LEAN, niveaux, solos). Les bandes Linkwitz-Riley sont en phase : leurs amplitudes s'ajoutent. */
-    void response (double f, const double x[3], double& l, double& r) const
+    /** Les deux traces au point f, en points (vers le bas positif) : écart gauche / droite de chaque bande (ampleur de
+        CURRENT, DRIFT, LEAN) et la courbe vivante des cloches de CURRENT de chaque canal. */
+    void traces (double f, const double x[3], bool anySolo, double out[2]) const
     {
         constexpr double big = 1.0e7;   // évaluation analogique (sans préchauffage)
         auto lr = [&] (bool low, double fc)
@@ -459,57 +776,41 @@ private:
         };
         const double w[4] { lr (true, x[1]) * lr (true, x[0]), lr (true, x[1]) * lr (false, x[0]),
                             lr (false, x[1]) * lr (true, x[2]), lr (false, x[1]) * lr (false, x[2]) };
-        bool anySolo = false;
-        for (auto* s : solo) anySolo |= s->getValue() > 0.5f;
         const bool stereo = meters.stereo.load() != 0;
-        auto reBp = [&] (double fc, double q)   // partie réelle de la bande passante normalisée = son amplitude au carré
-        {
-            const double m = vision::Svf::magnitude (vision::Svf::bandpass, fc, q, 0.0, f, big) / q;
-            return m * m;
-        };
-        l = r = 0.0;
+        out[0] = out[1] = 0.0;
         for (int b = 0; b < vision::numBands; ++b)
         {
-            if (w[b] < 1.0e-6) continue;
-            double g = juce::Decibels::decibelsToGain ((double) plainOf (*level[b]));
-            if (anySolo && solo[b]->getValue() < 0.5f) g = 0.0;
-            double hc = 1.0, s = 0.0;
-            if (on[b]->getValue() > 0.5f)
+            if (w[b] < 1.0e-4) continue;
+            if (on[b]->getValue() < 0.5f || (anySolo && solo[b]->getValue() < 0.5f)) continue;
+            const double amt = plainOf (*current[b]) / 100.0;
+            // l'écart : les deux canaux s'éloignent avec l'ampleur de CURRENT et DRIFT ; LEAN pousse vers son côté
+            const double sep = stereo ? 15.0 * std::min (amt, 1.6) + (drift[b]->getValue() > 0.5f ? 3.0 : 0.0) : 0.0;
+            const int ln = (int) std::lround (plainOf (*lean[b]));
+            const double shift = stereo ? (ln == 1 ? -6.0 : ln == 2 ? 6.0 : 0.0) : 0.0;
+            for (int c = 0; c < 2; ++c)
             {
-                for (int i = 0; i < 3; ++i)
+                double dev = 0.0;
+                for (int i = 0; i < vision::numCurrent; ++i)
                 {
-                    const double cg = meters.curG[b][0][i].load();
-                    if (std::abs (cg) > 1.0e-4)
-                        hc *= vision::Svf::magnitude (vision::Svf::bell, meters.curF[b][0][i].load(), meters.curQ[b][0][i].load(), cg, f, big);
-                    const double dw = meters.curG[b][1][i].load();
-                    if (stereo && std::abs (dw) > 1.0e-5) s += dw * reBp (meters.curF[b][1][i].load(), meters.curQ[b][1][i].load());
+                    const double g = meters.curG[b][c][i].load (std::memory_order_relaxed);
+                    if (std::abs (g) > 1.0e-4)
+                        dev += vision::gainToDb (vision::Svf::magnitude (vision::Svf::bell, meters.curF[b][c][i].load (std::memory_order_relaxed),
+                                                                         meters.curQ[b][c][i].load (std::memory_order_relaxed), g, f, big));
                 }
-                if (stereo)
-                {
-                    const double da = plainOf (*drift[b]) / 300.0;
-                    if (da > 1.0e-5)
-                    {
-                        double lo, hi; vision::bandEdges (x, b, lo, hi);
-                        const double fc = std::sqrt (lo * hi), rr = std::pow (hi / lo, 0.25);
-                        s += da * (reBp (fc * rr, 0.9) - reBp (fc / rr, 0.9));
-                    }
-                    const int ln = (int) std::lround (plainOf (*lean[b]));
-                    s += ln == 1 ? 0.1437 : ln == 2 ? -0.1437 : 0.0;
-                }
+                // la courbe des cloches, agrandie (14 points par dB), et l'écart du canal
+                out[c] += w[b] * (-14.0 * dev + (c == 0 ? -sep : sep) + shift);
             }
-            l += w[b] * g * hc * (1.0 + s);
-            r += w[b] * g * hc * (1.0 - s);
         }
-        l = std::max (l, 1.0e-4); r = std::max (r, 1.0e-4);
     }
 
-    juce::AudioProcessorValueTreeState& state;
     vision::Meters& meters;
     juce::RangedAudioParameter* xo[3] {};
     juce::RangedAudioParameter* level[vision::numBands] {}, * on[vision::numBands] {}, * solo[vision::numBands] {},
-                              * current[vision::numBands] {}, * drift[vision::numBands] {}, * lean[vision::numBands] {}, * sat[vision::numBands] {};
-    float activity[vision::numBands][2] {};
-    int selected = -1, hoverBand = -1, hoverXo = -1, dragBand = -1, dragXo = -1;
+                              * current[vision::numBands] {}, * drift[vision::numBands] {}, * lean[vision::numBands] {};
+    juce::RangedAudioParameter* hyper = nullptr;
+    std::array<float, 4> columns { 60, 180, 520, 640 };
+    float hyperX = 350.0f;
+    int hoverBand = -1, hoverXo = -1, hoverLabel = -1, dragBand = -1, dragXo = -1;
     float startLevel = 0.0f, startY = 0.0f, scale = 1.0f;
 };
 } // namespace ui

@@ -82,7 +82,7 @@ int main()
         setPlain (a, params::bandCurrent (3), 140.0f);
         a.presets.switchToSlot (2);                 // C
         setPlain (a, params::hyper, 1.0f);
-        setPlain (a, params::boxyDepth, -9.0f);
+        setPlain (a, params::boxyCut, -9.0f);
         runNoise (a, 1);
         juce::MemoryBlock state;
         a.getStateInformation (state);
@@ -96,12 +96,12 @@ int main()
         check (same, "état du projet : tous les paramètres retrouvés");
         check (b.presets.getSlot() == 2, "A / B / C : le jeu écouté (C) est retrouvé");
         b.presets.switchToSlot (0);
-        check (std::abs (plain (b, params::bandSat (2)) - 63.0f) < 0.05f && plain (b, params::hyper) < 0.5f && std::abs (plain (b, params::boxyDepth) + 4.0f) < 0.01f,
+        check (std::abs (plain (b, params::bandSat (2)) - 63.0f) < 0.05f && plain (b, params::hyper) < 0.5f && std::abs (plain (b, params::boxyCut)) < 0.01f,
                "A / B / C : A retrouvé tel quel");
         b.presets.switchToSlot (1);
         check (std::abs (plain (b, params::bandCurrent (3)) - 140.0f) < 0.1f && plain (b, params::hyper) < 0.5f, "A / B / C : B retrouvé tel quel");
         b.presets.switchToSlot (2);
-        check (plain (b, params::hyper) > 0.5f && std::abs (plain (b, params::boxyDepth) + 9.0f) < 0.01f, "A / B / C : C retrouvé tel quel");
+        check (plain (b, params::hyper) > 0.5f && std::abs (plain (b, params::boxyCut) + 9.0f) < 0.01f, "A / B / C : C retrouvé tel quel");
     }
 
     // chaque preset d'usine, joué une seconde

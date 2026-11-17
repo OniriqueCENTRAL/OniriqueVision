@@ -11,10 +11,9 @@ namespace params
 {
 inline const juce::String inGain = "inGain", outGain = "outGain", gainLink = "gainLink",
                           inHp = "inHp", inLp = "inLp", inSlope = "inSlope", outHp = "outHp", outLp = "outLp", outSlope = "outSlope",
-                          color = "color", satType = "satType", hyper = "hyper",
+                          color = "color", satType = "satType", hyper = "hyper", linear = "linear",
                           x1 = "x1", x2 = "x2", x3 = "x3",
-                          boxyOn = "boxyOn", boxyFreq = "boxyFreq", boxyDepth = "boxyDepth", boxyQ = "boxyQ",
-                          harshOn = "harshOn", harshFreq = "harshFreq", harshDepth = "harshDepth", harshQ = "harshQ",
+                          boxyFreq = "boxyFreq", boxyCut = "boxyCut", harshFreq = "harshFreq", harshCut = "harshCut",
                           surgicalPost = "surgicalPost", osRealtime = "osRealtime", osOffline = "osOffline", bypass = "bypass";
 
 inline const char* bandNames[vision::numBands] { "FIRST", "SECOND", "THIRD", "FOURTH" };
@@ -91,12 +90,6 @@ inline juce::AudioProcessorValueTreeState::ParameterLayout layout()
                        .withStringFromValueFunction ([] (float v, int) { return String (roundToInt (v)) + " %"; })
                        .withValueFromStringFunction ([] (const String& t) { return parseNumber (t); })));
     };
-    auto plain = [&] (const String& id, const String& name, float lo, float hi, float def)
-    {
-        l.add (std::make_unique<AudioParameterFloat> (ParameterID { id, 1 }, name, NormalisableRange<float> (lo, hi, 0.01f, 0.5f), def,
-                   AudioParameterFloatAttributes().withStringFromValueFunction ([] (float v, int) { return String (v, 2); })
-                       .withValueFromStringFunction ([] (const String& t) { return parseNumber (t); })));
-    };
     auto toggle = [&] (const String& id, const String& name, bool def)
     {
         l.add (std::make_unique<AudioParameterBool> (ParameterID { id, 1 }, name, def,
@@ -129,6 +122,7 @@ inline juce::AudioProcessorValueTreeState::ParameterLayout layout()
     choice (color, "Color", { "OFF", "INFRA", "TERRA", "SUPRA" }, demo ? 3 : 0);
     choice (satType, "Saturation Type", { "TAPE", "TUBE", "TRANS" }, 0);
     toggle (hyper, "Hyper Mode", false);
+    toggle (linear, "Linear Phase", false);
     // séparation
     freq (x1, "Crossover 1", 30.0f, 2000.0f, 150.0f);
     freq (x2, "Crossover 2", 100.0f, 8000.0f, 1000.0f);
@@ -142,18 +136,14 @@ inline juce::AudioProcessorValueTreeState::ParameterLayout layout()
         db (bandLevel (b), n + " Level", -18.0f, 12.0f, 0.0f);
         pct (bandSat (b), n + " Saturation", 100.0f, demo ? (b == 3 ? 55.0f : b == 0 ? 25.0f : 40.0f) : 0.0f);
         pct (bandCurrent (b), n + " Current", 200.0f, demo ? (b == 0 ? 10.0f : b == 1 ? 30.0f : b == 2 ? 70.0f : 95.0f) : 0.0f);
-        pct (bandDrift (b), n + " Drift", 100.0f, demo && b >= 2 ? 60.0f : 0.0f);
+        toggle (bandDrift (b), n + " Drift", demo && b != 1);
         choice (bandLean (b), n + " Lean", { "OFF", "LEFT", "RIGHT" }, demo ? (b == 2 ? 1 : b == 3 ? 2 : 0) : 0);
     }
     // chirurgie
-    toggle (boxyOn, "Boxy On", demo);
-    freq (boxyFreq, "Boxy Frequency", 150.0f, 1000.0f, 400.0f);
-    db (boxyDepth, "Boxy Depth", -18.0f, 0.0f, -4.0f);
-    plain (boxyQ, "Boxy Q", 0.5f, 6.0f, 1.4f);
-    toggle (harshOn, "Harsh On", false);
-    freq (harshFreq, "Harsh Frequency", 1500.0f, 8000.0f, 3500.0f);
-    db (harshDepth, "Harsh Depth", -18.0f, 0.0f, -4.0f);
-    plain (harshQ, "Harsh Q", 0.5f, 6.0f, 2.0f);
+    freq (boxyFreq, "Boxy Frequency", 200.0f, 700.0f, 400.0f);
+    db (boxyCut, "Boxy Cut", -12.0f, 0.0f, demo ? -3.0f : 0.0f);
+    freq (harshFreq, "Harsh Frequency", 2500.0f, 4500.0f, 3500.0f);
+    db (harshCut, "Harsh Cut", -12.0f, 0.0f, demo ? -2.0f : 0.0f);
     choice (surgicalPost, "Surgical Position", { "PRE", "POST" }, 0);
     // qualité
     choice (osRealtime, "Oversampling", { "1x", "2x", "4x", "8x" }, 1);
@@ -170,8 +160,8 @@ struct Reader
     {
         auto add = [&] (const juce::String& id) { v.push_back (s.getRawParameterValue (id)); jassert (v.back() != nullptr); };
         for (const auto* id : { &inGain, &outGain, &gainLink, &inHp, &inLp, &inSlope, &outHp, &outLp, &outSlope,
-                                &color, &satType, &hyper, &x1, &x2, &x3,
-                                &boxyOn, &boxyFreq, &boxyDepth, &boxyQ, &harshOn, &harshFreq, &harshDepth, &harshQ,
+                                &color, &satType, &hyper, &linear, &x1, &x2, &x3,
+                                &boxyFreq, &boxyCut, &harshFreq, &harshCut,
                                 &surgicalPost, &osRealtime, &osOffline, &bypass })
             add (*id);
         for (int b = 0; b < vision::numBands; ++b)
@@ -189,10 +179,9 @@ struct Reader
         vision::EngineParams p;
         p.inDb = f(); p.outDb = f(); p.gainLink = b();
         p.inHp = f(); p.inLp = f(); p.inSlope = c(); p.outHp = f(); p.outLp = f(); p.outSlope = c();
-        p.color = c(); p.satType = c(); p.hyper = b();
+        p.color = c(); p.satType = c(); p.hyper = b(); p.linear = b();
         p.xover[0] = f(); p.xover[1] = f(); p.xover[2] = f();
-        p.boxyOn = b(); p.boxyFreq = f(); p.boxyDepth = f(); p.boxyQ = f();
-        p.harshOn = b(); p.harshFreq = f(); p.harshDepth = f(); p.harshQ = f();
+        p.boxyFreq = f(); p.boxyCut = f(); p.harshFreq = f(); p.harshCut = f();
         p.surgicalPost = c() == 1;
         const int rt = c(), off = c();
         p.os = offline ? off : rt;
@@ -200,7 +189,7 @@ struct Reader
         for (auto& bp : p.band)
         {
             bp.on = b(); bp.solo = b(); bp.levelDb = f();
-            bp.sat = f() / 100.0; bp.current = f() / 100.0; bp.drift = f() / 100.0; bp.lean = c();
+            bp.sat = f() / 100.0; bp.current = f() / 100.0; bp.drift = b(); bp.lean = c();
         }
         return p;
     }

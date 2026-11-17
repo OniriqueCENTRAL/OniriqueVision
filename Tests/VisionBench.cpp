@@ -172,6 +172,43 @@ static void testNeutralAndBypass()
     }
 }
 
+static void testLinearPhase()
+{
+    std::printf ("\n[LINEAR PHASE]\n");
+    const double fs = 48000.0;
+    for (int os : { 0, 1, 2 })
+    {
+        // neutre : un retard pur (la correction annule la phase de la séparation)
+        Engine e; auto p = neutral(); p.os = os; p.linear = true;
+        e.prepare (fs, 512, p, 2);
+        const int lat = e.getLatency();
+        auto in = noise (48000, 21, 0.3);
+        // bruit limité à 16 kHz : le suréchantillonnage coupe lui-même le haut, près de Nyquist ; on mesure l'alignement
+        { ButterCascade lp; lp.set (false, 16000.0, 2, fs); for (auto& v : in) v = (float) lp.process (v); }
+        juce::AudioBuffer<float> b (2, 48000);
+        for (int i = 0; i < 48000; ++i) { b.setSample (0, i, in[(size_t) i]); b.setSample (1, i, in[(size_t) i]); }
+        run (e, b, p);
+        double err = 0.0, sig = 0.0;
+        for (int i = lat + 2000; i < 48000; ++i) { const double d = b.getSample (0, i) - in[(size_t) (i - lat)]; err += d * d; sig += (double) in[(size_t) (i - lat)] * in[(size_t) (i - lat)]; }
+        const double nullDb = 10.0 * std::log10 (err / sig + 1.0e-30);
+        std::printf ("  %dx : latence %d échantillons, neutre contre l'entrée retardée : %.1f dB\n", 1 << os, lat, nullDb);
+        check (nullDb < -50.0, "LINEAR PHASE neutre : retard pur (nul à -50 dB au moins)");
+    }
+    {
+        // niveaux de bande changés : la réponse reste symétrique autour de la latence (phase linéaire)
+        Engine e; auto p = neutral(); p.os = 1; p.linear = true; p.band[1].levelDb = -6.0; p.band[3].levelDb = 4.0;
+        e.prepare (fs, 512, p, 2);
+        const int lat = e.getLatency();
+        juce::AudioBuffer<float> b (2, 32768); b.clear();
+        b.setSample (0, 0, 1.0f); b.setSample (1, 0, 1.0f);
+        run (e, b, p);
+        double asym = 0.0, peak = 0.0;
+        for (int k = 0; k < 3000; ++k) { asym = std::max (asym, (double) std::abs (b.getSample (0, lat + k) - b.getSample (0, lat - k))); peak = std::max (peak, (double) std::abs (b.getSample (0, lat + k))); }
+        std::printf ("  bandes à -6 / +4 dB : asymétrie de la réponse %.2e (crête %.3f)\n", asym, peak);
+        check (asym < 2.0e-3 * peak, "LINEAR PHASE : chaque bande à phase linéaire, même quand son niveau change");
+    }
+}
+
 static void testSaturation()
 {
     std::printf ("\n[saturations] signatures harmoniques (sinus -12 dBFS, saturation 60 %%, bande seule)\n");
@@ -298,9 +335,9 @@ static void testCurrentDriftLean()
         check (dip > -4.0, "CURRENT 200 % : toujours sans creux profond en mono");
     }
     {
-        auto p = neutral(); for (auto& b : p.band) b.drift = 1.0;
+        auto p = neutral(); for (auto& b : p.band) b.drift = true;
         stereoStats (p, dip, peak, lr, corr);
-        std::printf ("  DRIFT 100 %% : somme mono %+.2f / %+.2f dB, écart L/R max %.2f dB, corrélation %.4f\n", dip, peak, lr, corr);
+        std::printf ("  DRIFT : somme mono %+.2f / %+.2f dB, écart L/R max %.2f dB, corrélation %.4f\n", dip, peak, lr, corr);
         check (lr > 1.5, "DRIFT : centres de bande décalés à gauche et à droite");
         check (dip > -0.05 && peak < 0.05, "DRIFT : somme mono inchangée (±0,05 dB)");
     }
@@ -356,7 +393,7 @@ static void testColorsAndSurgical()
     check (r[3][3] > 1.5 && std::abs (r[3][0]) < 1.0, "SUPRA : air et ouverture");
 
     {
-        auto p = neutral(); p.boxyOn = true; p.boxyFreq = 400; p.boxyDepth = -6; p.harshOn = true; p.harshFreq = 3500; p.harshDepth = -5;
+        auto p = neutral(); p.boxyFreq = 400; p.boxyCut = -6; p.harshFreq = 3500; p.harshCut = -5;
         const double a = response (p, 400.0), b = response (p, 3500.0), c = response (p, 60.0);
         std::printf ("  SURGICAL : 400 Hz %+.2f dB, 3,5 kHz %+.2f dB, 60 Hz %+.2f dB\n", a, b, c);
         check (std::abs (a + 6.0) < 0.6 && std::abs (b + 5.0) < 0.6 && std::abs (c) < 0.3, "BOXY et HARSH coupent ce qu'on leur demande");
@@ -414,7 +451,7 @@ static void testClicksAndStability()
         { "COLOR OFF -> SUPRA", [] (EngineParams& p) { p.color = 3; } },
         { "SOLO bande 1", [] (EngineParams& p) { p.band[0].solo = true; } },
         { "bande 1 OFF", [] (EngineParams& p) { p.band[0].on = false; } },
-        { "SURGICAL PRE -> POST (BOXY en service)", [] (EngineParams& p) { p.boxyOn = true; p.surgicalPost = true; } },
+        { "SURGICAL PRE -> POST (BOXY en service)", [] (EngineParams& p) { p.boxyCut = -6.0; p.surgicalPost = true; } },
         { "LEAN RIGHT", [] (EngineParams& p) { p.band[0].lean = 2; } },
         { "séparation 150 -> 400 Hz", [] (EngineParams& p) { p.xover[0] = 400; } },
         { "suréchantillonnage 2x -> 4x", [] (EngineParams& p) { p.os = 2; } },
@@ -435,8 +472,8 @@ static void testClicksAndStability()
     for (double rate : { 44100.0, 48000.0, 88200.0, 96000.0 })
         for (int os = 0; os < 4; ++os)
         {
-            Engine e; auto p = neutral(); p.os = os; p.hyper = true; p.color = 2; p.boxyOn = p.harshOn = true;
-            for (auto& b : p.band) { b.sat = 1.0; b.current = 2.0; b.drift = 1.0; b.levelDb = 6.0; }
+            Engine e; auto p = neutral(); p.os = os; p.hyper = true; p.color = 2; p.boxyCut = p.harshCut = -6.0;
+            for (auto& b : p.band) { b.sat = 1.0; b.current = 2.0; b.drift = true; b.levelDb = 6.0; }
             e.prepare (rate, 1024, p, 2);
             auto in = noise ((int) rate * 2, 11, 1.0);
             juce::AudioBuffer<float> b (2, (int) in.size());
@@ -459,7 +496,7 @@ static void testClicksAndStability()
 
     // mono
     {
-        Engine e; auto p = neutral(); for (auto& b : p.band) { b.current = 1.0; b.sat = 0.5; b.drift = 1.0; b.lean = 1; }
+        Engine e; auto p = neutral(); for (auto& b : p.band) { b.current = 1.0; b.sat = 0.5; b.drift = true; b.lean = 1; }
         e.prepare (fs, 512, p, 1);
         juce::AudioBuffer<float> b (1, 48000);
         auto in = noise (48000, 9, 0.5);
@@ -475,8 +512,8 @@ static void testCpu()
     std::printf ("\n[processeur] 10 s de stéréo à 48 kHz, tout en service\n");
     for (int os = 0; os < 4; ++os)
     {
-        Engine e; auto p = neutral(); p.os = os; p.color = 2; p.boxyOn = p.harshOn = true;
-        for (auto& b : p.band) { b.sat = 0.5; b.current = 1.0; b.drift = 0.5; b.lean = 1; }
+        Engine e; auto p = neutral(); p.os = os; p.color = 2; p.boxyCut = p.harshCut = -6.0;
+        for (auto& b : p.band) { b.sat = 0.5; b.current = 1.0; b.drift = true; b.lean = 1; }
         e.prepare (48000.0, 512, p, 2);
         auto in = noise (480000, 4, 0.4);
         juce::AudioBuffer<float> b (2, 480000);
@@ -496,6 +533,7 @@ int main()
     testFilters();
     testCrossover();
     testNeutralAndBypass();
+    testLinearPhase();
     testSaturation();
     testCurrentDriftLean();
     testColorsAndSurgical();

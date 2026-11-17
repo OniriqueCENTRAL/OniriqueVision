@@ -30,6 +30,7 @@ void VisionProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
     license.refresh();
 #endif
     const int channels = std::max (1, getMainBusNumOutputChannels());
+    const juce::ScopedLock lock (linearLock);   // la minuterie prépare la correction de LINEAR PHASE : pas pendant le prepare
     engine.prepare (sampleRate, samplesPerBlock, reader.read (isNonRealtime()), std::min (2, channels));
     setLatencySamples (engine.getLatency());
     prepared.store (true);
@@ -62,6 +63,15 @@ void VisionProcessor::primeDemo()
 void VisionProcessor::timerCallback()
 {
     if (! prepared.load()) return;
+    // LINEAR PHASE : la correction suit les séparations (préparée ici, jamais dans le thread audio)
+    {
+        const juce::ScopedTryLock lock (linearLock);
+        if (lock.isLocked())
+        {
+            auto p = reader.read (false);
+            engine.loadLinear (p.xover);
+        }
+    }
     // la latence du suréchantillonnage en service (mesurée), redéclarée quand elle change
     const int lat = engine.getLatencyShared();
     if (lat != getLatencySamples()) setLatencySamples (lat);

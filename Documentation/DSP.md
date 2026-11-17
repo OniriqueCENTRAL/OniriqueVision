@@ -6,8 +6,8 @@ Fichiers : `Source/dsp/VisionDsp.h` (briques), `Source/dsp/VisionEngine.h` (mote
 
 ```
 entrée → gain d'entrée → filtres d'entrée (HP / LP) → suréchantillonnage (1x à 8x) →
-  [SURGICAL en PRE] → séparation en 4 bandes →
-    par bande : saturation → CURRENT (part commune) → part stéréo (CURRENT, DRIFT, LEAN) → niveau, solo
+  [LINEAR PHASE : correction de phase] → [SURGICAL en PRE] → séparation en 4 bandes →
+    par bande : saturation → CURRENT (dual-mono) → part stéréo (DRIFT, LEAN) → niveau, solo
   → recombinaison → [SURGICAL en POST] → COLOR →
 sous-échantillonnage → filtres de sortie → gain de sortie (compensé par GAIN LINK) → sortie
 ```
@@ -40,27 +40,32 @@ Un drive par bande (0 à 24 dB, ×2 en HYPER), gain unitaire en zone linéaire d
 l'écart. Les crêtes restent tassées, le niveau moyen est gardé. Mesure sur bruit rose : ±0,1 dB à 50 %, ±1 dB à 100 %,
 +0,0 dB en HYPER.
 
-## Compatibilité mono, par construction
+## CURRENT : dérive spectrale stochastique, en dual-mono
 
-Tout ce qui écarte la gauche de la droite (part stéréo de CURRENT, DRIFT, LEAN) est un signal s tiré du centre
-M = (L + R) / 2 de la bande, ajouté à gauche et retranché à droite. La somme L + R ne change d'aucun échantillon.
+La réponse de chaque bande devient une courbe vivante le long des fréquences, différente à gauche et à droite.
 
-## CURRENT : dérive spectrale stochastique
-
-- **Part commune** (le mouvement, audible même en mono) : trois cloches par bande dont le gain (±1,4 dB à 100 %,
-  ±3 dB à 200 %) et la position dérivent au hasard ; leur moyenne est retirée à chaque pas, le timbre est gardé.
-- **Part stéréo** : trois bandes passantes normalisées, tirées du centre, dont les poids dérivent chacun de leur côté
-  (jusqu'à ±0,2 de s à 100 %, 3,5 dB entre gauche et droite).
+- Chaque canal a ses **six cloches** étroites, réparties sur la bande (une par sixième, Q selon la largeur de la bande,
+  1,2 à 6), dont le gain et la position dérivent au hasard, **chaque canal de son côté** (graines différentes).
+- Ampleur : ±1,8 dB à 100 %, jusqu'à ±4 dB à 200 % ; période moyenne 0,9 s à 100 %, 0,6 s à 200 %.
+- Moyenne des gains retirée à chaque pas : le timbre d'origine est gardé.
 - **Dérive** (`Wander`) : cibles et durées tirées au sort (entre 0,45 et 1,75 fois la période moyenne), passage en
   cosinus, lissage du second ordre. Aucune période : autocorrélation maximale 0,18 entre 5 et 30 s.
-- Plus on pousse, plus c'est ample et vif (période moyenne de 1,8 s à 100 %, 1,2 s à 200 %).
-- Mesures (bruit rose mono dans une piste stéréo) : écart L/R jusqu'à 4,6 dB, corrélation 0,989, somme mono à ±0,6 dB
-  (seule la part commune la touche).
+- Aucun passe-tout, aucun retard : la somme mono ne se creuse pas en peigne. En mono, le canal garde son mouvement.
+- Mesures (bruit rose mono dans une piste stéréo, tiers d'octave) : somme mono à ±0,8 dB à 100 %, ±2 dB à 200 % ;
+  corrélation 0,997 (100 %) et 0,986 (200 %).
+- La fenêtre animée dessine ces cloches telles que le moteur les publie, canal par canal (14 points par dB), plus
+  l'écart gauche / droite qui grandit avec CURRENT et DRIFT.
 
-## DRIFT
+## Compatibilité mono de DRIFT et LEAN, par construction
 
-Deux bandes passantes sur le centre de la bande, une sous son centre, une au-dessus ; s = a · (BP haut - BP bas), a = 1/3
-à 100 % : le centre glisse vers le haut à gauche, vers le bas à droite (6 dB d'écart au sommet). Somme mono : inchangée.
+Leur part stéréo est un signal s tiré du centre M = (L + R) / 2 de la bande, ajouté à gauche et retranché à droite.
+La somme L + R ne change d'aucun échantillon.
+
+## DRIFT (interrupteur par bande)
+
+Deux bandes passantes sur le centre de la bande, une sous son centre, une au-dessus ; s = a · (BP haut - BP bas),
+a = 0,2 : le centre s'écarte, vers le haut à gauche, vers le bas à droite (3,5 dB d'écart au sommet). Somme mono :
+inchangée.
 
 ## LEAN
 
@@ -81,8 +86,9 @@ Trois boîtiers, chacun une égalisation de caractère et un comportement ; ils 
 
 ## SURGICAL, filtres, niveaux
 
-- BOXY (150 Hz - 1 kHz) et HARSH (1,5 - 8 kHz) : cloches de coupe jusqu'à -18 dB, Q 0,5 à 6. PRE / POST : les coupes
-  s'effacent, changent de place, reviennent (sans clic). Éteintes, elles ne calculent rien.
+- BOXY (200 - 700 Hz, Q 1,3) et HARSH (2,5 - 4,5 kHz, Q 1,8) : une fréquence et une coupe (0 à -12 dB) chacune, sur
+  quatre faders. PRE / POST : les coupes s'effacent, changent de place, reviennent (sans clic). Sans coupe, elles ne
+  calculent rien.
 - Filtres d'entrée et de sortie : Butterworth en cascade, 12, 24 ou 48 dB/oct ; tout au bout de leur course : OFF.
 - GAIN LINK : sortie = sortie - entrée (en dB), pour comparer à volume égal.
 
@@ -90,11 +96,22 @@ Trois boîtiers, chacun une égalisation de caractère et un comportement ; ils 
 
 Demi-bandes FIR à phase linéaire (JUCE), 1x à 8x ; le rendu hors ligne a son propre facteur. La latence de chaque
 facteur est **mesurée** au `prepare` (impulsion à travers le suréchantillonnage, centre de gravité de l'énergie) et
-c'est elle qui est déclarée à l'hôte : 0, 49, 61 et 65 échantillons à 48 kHz. Changer de facteur pendant la lecture :
+c'est elle qui est déclarée à l'hôte : 0, 49, 60 et 65 échantillons à 48 kHz. Le retard du suréchantillonnage est souvent
+fractionnaire : il est complété jusqu'à l'échantillon entier dans le domaine suréchantillonné, l'alignement est exact. Changer de facteur pendant la lecture :
 le nouveau chemin se remplit, puis un fondu de 40 ms. BYPASS : rampe linéaire de 30 ms vers le signal d'origine retardé
 de la latence (au bit près à son terme).
 
+## LINEAR PHASE
+
+Une bande Linkwitz-Riley d'ordre 4 a exactement la phase du passe-tout de sa séparation (LP4 = AP · |LP4|,
+HP4 = AP · |HP4|) ; avec la compensation croisée, chacune des quatre bandes a la phase du passe-tout total
+AP(f1)·AP(f2)·AP(f3). Corriger ce passe-tout (sa réponse impulsionnelle retournée dans le temps, en convolution à
+partitions uniformes, avant la séparation) rend donc **chaque bande** à phase linéaire, quels que soient les niveaux.
+Latence ajoutée : 100 ms, exacte par construction. Mesures : neutre = retard pur à -135 dB en 1x (-73 dB en
+suréchantillonné, à cause du filtre de Nyquist) ; bandes à -6 et +4 dB : réponse symétrique à 7·10⁻⁸ près. La
+correction suit les séparations (préparée hors du thread audio, basculée en fondu d'un bloc).
+
 ## Processeur
 
-Tout en service (4 bandes saturées, CURRENT, DRIFT, LEAN, TERRA, BOXY et HARSH), 48 kHz stéréo : 2,6 % d'un cœur en 1x,
-5,6 % en 2x, 11 % en 4x, 22 % en 8x.
+Tout en service (4 bandes saturées, CURRENT, DRIFT, LEAN, TERRA, BOXY et HARSH), 48 kHz stéréo : 3 % d'un cœur en 1x,
+6,5 % en 2x, 13 % en 4x, 25 % en 8x.

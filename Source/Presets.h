@@ -18,7 +18,7 @@ inline juce::StringArray tagNames() { return { "Vocals", "Drums", "Instruments",
 
 using Values = std::vector<std::pair<juce::String, float>>;
 
-/** Les quatre bandes d'un coup : saturation, CURRENT, DRIFT (en %). */
+/** Les quatre bandes d'un coup : saturation, CURRENT (en %), DRIFT (en service si non nul). */
 inline Values bands (std::array<float, 4> sat, std::array<float, 4> current, std::array<float, 4> drift)
 {
     using namespace params;
@@ -27,7 +27,7 @@ inline Values bands (std::array<float, 4> sat, std::array<float, 4> current, std
     {
         if (sat[(size_t) b] > 0.0f) v.push_back ({ bandSat (b), sat[(size_t) b] });
         if (current[(size_t) b] > 0.0f) v.push_back ({ bandCurrent (b), current[(size_t) b] });
-        if (drift[(size_t) b] > 0.0f) v.push_back ({ bandDrift (b), drift[(size_t) b] });
+        if (drift[(size_t) b] > 0.0f) v.push_back ({ bandDrift (b), 1.0f });   // DRIFT : en service ou non
     }
     return v;
 }
@@ -42,18 +42,18 @@ inline std::vector<onirique::PresetBank::Stock> stockPresets()
 
         // ---- VOCALS
         { "VOCAL WARMTH", vocals,
-          Values { { satType, 1 }, { color, 1 }, { boxyOn, 1 }, { boxyFreq, 350 }, { boxyDepth, -3 } }
+          Values { { satType, 1 }, { color, 1 }, { boxyFreq, 350 }, { boxyCut, -3 } }
               + bands ({ 20, 30, 15, 10 }, { 0, 15, 25, 20 }, { 0, 0, 20, 20 }) },
         { "MODERN VOCAL", vocals,
-          Values { { satType, 0 }, { color, 2 }, { inHp, 80 }, { harshOn, 1 }, { harshFreq, 3200 }, { harshDepth, -3 }, { surgicalPost, 1 } }
+          Values { { satType, 0 }, { color, 2 }, { inHp, 80 }, { harshFreq, 3200 }, { harshCut, -3 }, { surgicalPost, 1 } }
               + bands ({ 10, 25, 35, 25 }, { 0, 20, 40, 50 }, { 0, 10, 30, 40 }) },
         { "WIDE LEAD", vocals,
           Values { { satType, 0 }, { color, 3 } } + bands ({ 10, 20, 25, 20 }, { 0, 40, 80, 100 }, { 0, 30, 60, 80 }) },
         { "VOCAL PRESENCE", vocals,
-          Values { { satType, 2 }, { color, 2 }, { bandLevel (2), 1.5f }, { harshOn, 1 }, { harshFreq, 4000 }, { harshDepth, -2 }, { surgicalPost, 1 } }
+          Values { { satType, 2 }, { color, 2 }, { bandLevel (2), 1.5f }, { harshFreq, 4000 }, { harshCut, -2 }, { surgicalPost, 1 } }
               + bands ({ 15, 20, 40, 20 }, { 0, 10, 30, 30 }, { 0, 0, 10, 20 }) },
         { "AIRY VOCAL", vocals,
-          Values { { satType, 0 }, { color, 3 }, { x3, 7000 }, { bandLevel (3), 2 }, { boxyOn, 1 }, { boxyFreq, 300 }, { boxyDepth, -2 } }
+          Values { { satType, 0 }, { color, 3 }, { x3, 7000 }, { bandLevel (3), 2 }, { boxyFreq, 300 }, { boxyCut, -2 } }
               + bands ({ 5, 10, 15, 30 }, { 0, 10, 30, 90 }, { 0, 0, 20, 60 }) },
         { "THICK VOCAL", vocals,
           Values { { satType, 1 }, { color, 1 }, { bandLevel (0), 1 } } + bands ({ 35, 45, 30, 15 }, { 10, 20, 20, 15 }, { 0, 0, 0, 0 }) },
@@ -62,7 +62,7 @@ inline std::vector<onirique::PresetBank::Stock> stockPresets()
         { "ANALOG DRUMS", drums,
           Values { { satType, 0 }, { color, 2 } } + bands ({ 40, 35, 30, 25 }, { 0, 10, 20, 30 }, { 0, 0, 10, 20 }) },
         { "PUNCHY DRUMS", drums,
-          Values { { satType, 2 }, { bandLevel (0), 1.5f }, { bandLevel (1), -1 }, { boxyOn, 1 }, { boxyFreq, 450 }, { boxyDepth, -4 } }
+          Values { { satType, 2 }, { bandLevel (0), 1.5f }, { bandLevel (1), -1 }, { boxyFreq, 450 }, { boxyCut, -4 } }
               + bands ({ 50, 30, 20, 10 }, { 0, 0, 10, 15 }, { 0, 0, 0, 0 }) },
         { "WIDE PERCUSSION", drums,
           Values { { satType, 0 }, { color, 3 }, { x1, 200 }, { x2, 1500 }, { x3, 6000 }, { bandLean (2), 1 }, { bandLean (3), 2 } }
@@ -76,7 +76,7 @@ inline std::vector<onirique::PresetBank::Stock> stockPresets()
         { "STEREO KEYS", instruments,
           Values { { satType, 0 }, { color, 2 }, { bandLean (1), 1 }, { bandLean (2), 2 } } + bands ({ 10, 15, 15, 10 }, { 0, 50, 80, 90 }, { 0, 40, 60, 60 }) },
         { "GUITAR DIMENSION", instruments,
-          Values { { satType, 2 }, { color, 3 }, { x1, 120 }, { x2, 800 }, { x3, 4000 }, { inHp, 70 }, { boxyOn, 1 }, { boxyFreq, 500 }, { boxyDepth, -3 } }
+          Values { { satType, 2 }, { color, 3 }, { x1, 120 }, { x2, 800 }, { x3, 4000 }, { inHp, 70 }, { boxyFreq, 500 }, { boxyCut, -3 } }
               + bands ({ 10, 30, 35, 20 }, { 0, 40, 70, 60 }, { 0, 30, 50, 40 }) },
         { "BASS CHARACTER", instruments,
           Values { { satType, 2 }, { color, 1 }, { x1, 90 }, { x2, 400 }, { x3, 2500 }, { bandLevel (3), -2 } }

@@ -8,20 +8,24 @@
 //  ONIRIQUE VISION : le moteur.
 //
 //  entrée → gain d'entrée → filtres d'entrée (HP / LP) → suréchantillonnage →
-//      [SURGICAL en PRE] → séparation en 4 bandes (Linkwitz-Riley 24 dB/oct, somme passe-tout) →
-//      par bande : saturation (TAPE / TUBE / TRANS, drive de la bande, ×2 en HYPER) → CURRENT → DRIFT → LEAN →
-//                  niveau de la bande, solo
+//      [LINEAR PHASE : correction de phase de la séparation] → [SURGICAL en PRE] →
+//      séparation en 4 bandes (Linkwitz-Riley 24 dB/oct, somme passe-tout) →
+//      par bande : saturation (TAPE / TUBE / TRANS, drive de la bande, ×2 en HYPER) → CURRENT (dérive spectrale
+//                  stochastique, indépendante à gauche et à droite) → DRIFT → LEAN → niveau de la bande, solo
 //      → recombinaison → [SURGICAL en POST] → COLOR (INFRA / TERRA / SUPRA) →
 //  sous-échantillonnage → filtres de sortie → gain de sortie (compensé par GAIN LINK) → sortie
 //
 //  Rien n'est alloué dans process() : tout est réservé dans prepare(). Chaque réglage est lissé ; les coefficients
-//  des filtres modulés sont recalculés toutes les 32 échantillons (rythme de contrôle). La latence (celle des filtres
-//  de suréchantillonnage) est MESURÉE au prepare, pour chaque facteur, sur une impulsion.
+//  des filtres modulés sont recalculés toutes les 32 échantillons (rythme de contrôle). La latence est MESURÉE au
+//  prepare (suréchantillonnage) ou exacte par construction (LINEAR PHASE).
 //==============================================================================
 namespace vision
 {
 constexpr int numBands = 4;
 constexpr int controlStep = 32;
+constexpr int numCurrent = 6;          // cloches de CURRENT par bande et par canal
+constexpr double driftStrength = 0.2;  // DRIFT : (1 + a) / (1 - a) = 3,5 dB entre les deux côtés, au sommet
+constexpr double linearSeconds = 0.1;  // LINEAR PHASE : longueur de la correction (et latence ajoutée)
 
 struct BandParams
 {
@@ -29,7 +33,7 @@ struct BandParams
     double levelDb = 0.0;
     double sat = 0.0;       // 0 .. 1
     double current = 0.0;   // 0 .. 2 (au-delà de 1 : expérimental)
-    double drift = 0.0;     // 0 .. 1
+    bool drift = false;
     int lean = 0;           // 0 OFF, 1 LEFT, 2 RIGHT
 };
 
@@ -41,12 +45,11 @@ struct EngineParams
     int inSlope = 1, outSlope = 1;           // 0 = 12, 1 = 24, 2 = 48 dB/oct
     int color = 0;                           // 0 OFF, 1 INFRA, 2 TERRA, 3 SUPRA
     int satType = 0;                         // 0 TAPE, 1 TUBE, 2 TRANS
-    bool hyper = false;
+    bool hyper = false, linear = false;
     double xover[3] { 150.0, 1000.0, 5000.0 };
     BandParams band[numBands];
-    bool boxyOn = false, harshOn = false, surgicalPost = false;
-    double boxyFreq = 400.0, boxyDepth = -4.0, boxyQ = 1.4;
-    double harshFreq = 3500.0, harshDepth = -4.0, harshQ = 2.0;
+    bool surgicalPost = false;
+    double boxyFreq = 400.0, boxyCut = 0.0, harshFreq = 3500.0, harshCut = 0.0;   // coupes en dB (0 = rien)
     int os = 1;                              // 0 = 1x, 1 = 2x, 2 = 4x, 3 = 8x
     bool bypass = false;
 };
@@ -76,8 +79,8 @@ struct Meters
 {
     std::atomic<float> inPeak[2] {}, outPeak[2] {}, inRms[2] {}, outRms[2] {};
     std::atomic<float> bandRms[numBands][2] {};
-    // CURRENT : les trois cloches de chaque bande et canal (fréquence, gain en dB, Q)
-    std::atomic<float> curF[numBands][2][3] {}, curG[numBands][2][3] {}, curQ[numBands][2][3] {};
+    // CURRENT : les cloches de chaque bande et de chaque canal (fréquence, gain en dB, Q), telles qu'elles sont maintenant
+    std::atomic<float> curF[numBands][2][numCurrent] {}, curG[numBands][2][numCurrent] {}, curQ[numBands][2][numCurrent] {};
     std::atomic<float> driftDb[numBands] {}, leanDb[numBands] {};
     std::atomic<float> supraDyn { 0.0f }, terraDyn { 0.0f };
     std::atomic<int> stereo { 1 };
@@ -86,7 +89,8 @@ struct Meters
 //==============================================================================
 /** Séparation en quatre bandes par Linkwitz-Riley d'ordre 4 (deux Butterworth d'ordre 2 en cascade). Chaque branche
     reçoit le passe-tout de la séparation qu'elle ne traverse pas : la somme des quatre bandes est alors un passe-tout
-    exact (amplitude plate). */
+    exact, AP(f1)·AP(f2)·AP(f3). Propriété utile : chaque bande a exactement la phase de ce passe-tout (LP4 = AP · |LP4|,
+    HP4 = AP · |HP4|) ; le corriger rend donc chaque bande à phase linéaire (LINEAR PHASE). */
 struct Crossover
 {
     Svf lp[3][2], hp[3][2];
@@ -121,14 +125,178 @@ struct Crossover
         out[2] = lp[2][1].process (lp[2][0].process (high));
         out[3] = hp[2][1].process (hp[2][0].process (high));
     }
+
+    /** La correction de LINEAR PHASE : la réponse impulsionnelle du passe-tout total, retournée dans le temps
+        (l'inverse d'un passe-tout est son conjugué). Mise en cascade avec la séparation, elle donne un retard pur de
+        (length - 1) échantillons. */
+    static void inverseAllpass (const double f[3], double fs, float* out, int length)
+    {
+        Svf a1, a2, a3;
+        a1.set (Svf::allpass, f[0], 0.70710678, 0.0, fs);
+        a2.set (Svf::allpass, f[1], 0.70710678, 0.0, fs);
+        a3.set (Svf::allpass, f[2], 0.70710678, 0.0, fs);
+        for (int i = 0; i < length; ++i)
+        {
+            const double h = a3.process (a2.process (a1.process (i == 0 ? 1.0 : 0.0)));
+            out[length - 1 - i] = (float) h;
+        }
+    }
+};
+
+//==============================================================================
+/** Convolution à partitions uniformes (overlap-save, FFT de 2B), pour la correction de LINEAR PHASE.
+    - prepare() réserve tout (réponse la plus longue, deux jeux de spectres) ; process() n'alloue rien.
+    - La réponse se prépare hors du thread audio (setResponse, thread des messages) dans le jeu inactif ; le thread audio
+      bascule au bloc suivant, en fondu d'un bloc entre l'ancienne et la nouvelle réponse.
+    - Retard : celui de la réponse elle-même + B échantillons (un bloc). */
+class Convolver
+{
+public:
+    void prepare (int block, int maxLength, int channelCount)
+    {
+        B = block; channels = channelCount;
+        order = 1; while ((1 << order) < 2 * B) ++order;
+        N = 1 << order;
+        fft = std::make_unique<juce::dsp::FFT> (order);
+        maxParts = (maxLength + B - 1) / B;
+        for (auto& h : H) h.assign ((size_t) maxParts * (size_t) (N + 2), 0.0f);
+        fdl.assign ((size_t) channels * (size_t) maxParts * (size_t) (N + 2), 0.0f);
+        inBuf.assign ((size_t) channels * (size_t) N, 0.0f);
+        outBuf.assign ((size_t) channels * (size_t) B, 0.0f);
+        work.assign ((size_t) N * 2, 0.0f); acc.assign ((size_t) N + 2, 0.0f); acc2.assign ((size_t) N + 2, 0.0f);
+        parts[0] = parts[1] = 0; active = 0; pending.store (0);
+        reset();
+    }
+
+    void reset()
+    {
+        std::fill (fdl.begin(), fdl.end(), 0.0f);
+        std::fill (inBuf.begin(), inBuf.end(), 0.0f);
+        std::fill (outBuf.begin(), outBuf.end(), 0.0f);
+        pos = 0; fdlHead = 0;
+    }
+
+    int blockSize() const { return B; }
+    bool ready() const { return parts[active] > 0 || pending.load() == 1; }
+
+    /** Thread des messages : prépare une nouvelle réponse. Rend false si la précédente n'a pas encore été prise. */
+    bool setResponse (const float* ir, int length)
+    {
+        if (pending.load() != 0 || fft == nullptr) return false;
+        const int target = 1 - active;
+        const int p = std::min (maxParts, (length + B - 1) / B);
+        std::vector<float> tmp ((size_t) N * 2, 0.0f);
+        for (int k = 0; k < p; ++k)
+        {
+            std::fill (tmp.begin(), tmp.end(), 0.0f);
+            for (int i = 0; i < B && k * B + i < length; ++i) tmp[(size_t) i] = ir[k * B + i];
+            fft->performRealOnlyForwardTransform (tmp.data(), true);
+            std::copy (tmp.begin(), tmp.begin() + N + 2, H[target].begin() + (ptrdiff_t) k * (N + 2));
+        }
+        parts[target] = p;
+        pending.store (1);
+        return true;
+    }
+
+    /** Au prepare (aucune lecture en cours) : la réponse est prise tout de suite, sans fondu. */
+    void setResponseNow (const float* ir, int length)
+    {
+        pending.store (0);
+        if (setResponse (ir, length)) { active = 1 - active; pending.store (0); }
+    }
+
+    /** En place, n échantillons par canal. */
+    void process (float* const* io, int n)
+    {
+        for (int i = 0; i < n; ++i)
+        {
+            for (int c = 0; c < channels; ++c)
+            {
+                inBuf[(size_t) (c * N + B + pos)] = io[c][i];
+                io[c][i] = outBuf[(size_t) (c * B + pos)];
+            }
+            if (++pos == B) { pos = 0; runBlock(); }
+        }
+    }
+
+private:
+    void runBlock()
+    {
+        const bool swap = pending.load() == 1;
+        fdlHead = (fdlHead + maxParts - 1) % maxParts;
+        for (int c = 0; c < channels; ++c)
+        {
+            // spectre du bloc d'entrée (les B échantillons d'avant et les B nouveaux)
+            std::copy (inBuf.begin() + c * N, inBuf.begin() + c * N + N, work.begin());
+            std::fill (work.begin() + N, work.end(), 0.0f);
+            fft->performRealOnlyForwardTransform (work.data(), true);
+            float* slot = fdl.data() + ((size_t) c * (size_t) maxParts + (size_t) fdlHead) * (size_t) (N + 2);
+            std::copy (work.begin(), work.begin() + N + 2, slot);
+            // l'entrée avance d'un bloc
+            std::copy (inBuf.begin() + c * N + B, inBuf.begin() + c * N + N, inBuf.begin() + c * N);
+
+            accumulate (c, active, acc);
+            inverse (acc);
+            float* out = outBuf.data() + (size_t) c * (size_t) B;
+            if (swap)
+            {
+                accumulate (c, 1 - active, acc2);
+                inverse (acc2);
+                for (int i = 0; i < B; ++i)
+                {
+                    const float t = (float) (i + 1) / (float) B;
+                    out[i] = (1.0f - t) * acc[(size_t) (B + i)] + t * acc2[(size_t) (B + i)];
+                }
+            }
+            else
+                for (int i = 0; i < B; ++i) out[i] = acc[(size_t) (B + i)];
+        }
+        if (swap) { active = 1 - active; pending.store (0); }
+    }
+
+    void accumulate (int c, int set, std::vector<float>& dst)
+    {
+        std::fill (dst.begin(), dst.end(), 0.0f);
+        const int bins = N / 2 + 1;
+        for (int k = 0; k < parts[set]; ++k)
+        {
+            const float* x = fdl.data() + ((size_t) c * (size_t) maxParts + (size_t) ((fdlHead + k) % maxParts)) * (size_t) (N + 2);
+            const float* h = H[set].data() + (size_t) k * (size_t) (N + 2);
+            for (int b = 0; b < bins; ++b)
+            {
+                const float xr = x[2 * b], xi = x[2 * b + 1], hr = h[2 * b], hi = h[2 * b + 1];
+                dst[(size_t) (2 * b)] += xr * hr - xi * hi;
+                dst[(size_t) (2 * b + 1)] += xr * hi + xi * hr;
+            }
+        }
+    }
+
+    void inverse (std::vector<float>& spec)
+    {
+        std::copy (spec.begin(), spec.begin() + N + 2, work.begin());
+        std::fill (work.begin() + N + 2, work.end(), 0.0f);
+        fft->performRealOnlyInverseTransform (work.data());
+        std::copy (work.begin(), work.begin() + N, spec.begin());
+    }
+
+    int B = 256, N = 512, order = 9, channels = 2, maxParts = 1, pos = 0, fdlHead = 0;
+    std::unique_ptr<juce::dsp::FFT> fft;
+    std::vector<float> H[2], fdl, inBuf, outBuf, work, acc, acc2;
+    int parts[2] {}, active = 0;
+    std::atomic<int> pending { 0 };
 };
 
 //==============================================================================
 /** Une bande : saturation, CURRENT, DRIFT, LEAN, niveau et solo, pour les deux canaux.
 
-    Compatibilité mono, par construction : tout ce qui écarte la gauche de la droite (la part stéréo de CURRENT, DRIFT,
-    LEAN) est un signal s, tiré du centre M = (L + R) / 2 de la bande, AJOUTÉ à gauche et RETRANCHÉ à droite. La somme
-    L + R ne change donc jamais d'un échantillon : rien ne peut s'annuler en mono. */
+    CURRENT, dérive spectrale stochastique en « dual-mono » : chaque canal a ses six cloches étroites, réparties sur la
+    bande, dont le gain et la position dérivent au hasard, CHACUNE DE SON CÔTÉ (graines différentes à gauche et à
+    droite). La réponse de la bande devient une courbe vivante le long des fréquences, différente à gauche et à droite.
+    Moyenne nulle à chaque pas : le timbre est gardé. Aucun passe-tout, aucun retard : la somme mono ne peut pas se
+    creuser en peigne. En mono, le canal unique garde son mouvement.
+
+    DRIFT et LEAN : un signal s tiré du centre M = (L + R) / 2 de la bande, AJOUTÉ à gauche et RETRANCHÉ à droite.
+    La somme L + R ne change pas d'un échantillon. */
 struct Band
 {
     int index = 0;
@@ -136,17 +304,13 @@ struct Band
     Tape tape[2]; Tube tube[2]; Transformer trans[2];
     Smooth typeW[3];                 // poids de TAPE, TUBE, TRANS (fondu quand on change de type)
     Smooth satMix, drive, curAmt, driftAmt, lean, level, solo, onMix;
-    // CURRENT : trois cloches communes (le mouvement, audible même en mono) et trois bandes passantes différentielles
-    // (la part stéréo : leurs poids dérivent chacun de leur côté)
-    Svf common[2][3];
-    Svf diff[3];
-    double diffW[3] {}, diffK[3] {};
-    Wander wCommonG[3], wCommonF[3], wDiffG[3], wDiffF[3];
-    // DRIFT : deux bandes passantes sur le centre, une sous le centre de la bande, une au-dessus
+    Svf cur[2][numCurrent];
+    Wander wG[2][numCurrent], wF[2][numCurrent];
     Svf driftLo, driftHi;
     double driftA = 0.0, driftK = 1.0;
     bool curActive = false, driftActive = false;
     double rms[2] {};
+    double makeup = 1.0, envIn = 0.0, envOut = 0.0, accIn = 0.0, accOut = 0.0;   // rattrapage du niveau moyen
 
     void prepare (double rate, int bandIndex, uint64_t seed)
     {
@@ -157,14 +321,13 @@ struct Band
         for (auto& t : typeW) t.setTime (0.03, rate);
         drive.setTime (0.05, rate);
         curAmt.setTime (0.08, ctl); driftAmt.setTime (0.06, ctl);   // ces deux-là avancent au rythme de contrôle
-        for (int i = 0; i < 3; ++i)
-        {
-            const auto k = (uint64_t) (i + 1);
-            wCommonG[i].seed (seed + 0x1001ull * k);
-            wCommonF[i].seed (seed * 3ull + 0x2003ull * k);
-            wDiffG[i].seed (seed * 5ull + 0x3007ull * k);
-            wDiffF[i].seed (seed * 7ull + 0x4009ull * k);
-        }
+        for (int c = 0; c < 2; ++c)
+            for (int i = 0; i < numCurrent; ++i)
+            {
+                const auto k = (uint64_t) (i + 1) + 97ull * (uint64_t) c;
+                wG[c][i].seed (seed + 0x1001ull * k);
+                wF[c][i].seed (seed * 3ull + 0x2003ull * k);
+            }
         reset();
     }
 
@@ -173,10 +336,9 @@ struct Band
         for (int c = 0; c < 2; ++c)
         {
             tape[c].reset(); tube[c].reset(); trans[c].reset();
-            for (auto& f : common[c]) f.reset();
+            for (auto& f : cur[c]) f.reset();
             rms[c] = 0.0;
         }
-        for (auto& f : diff) f.reset();
         driftLo.reset(); driftHi.reset();
         makeup = 1.0; envIn = envOut = accIn = accOut = 0.0;
     }
@@ -207,7 +369,7 @@ struct Band
         satMix.target = std::clamp (b.sat * 5.0, 0.0, 1.0);
         drive.target = driveFor (b.sat, hyper);
         curAmt.target = b.current;
-        driftAmt.target = b.drift;
+        driftAmt.target = b.drift ? 1.0 : 0.0;
         // LEAN : ε = 0,1437 → (1 + ε) / (1 - ε) = 2,5 dB entre les deux côtés
         lean.target = b.lean == 0 ? 0.0 : b.lean == 1 ? 0.1437 : -0.1437;
         level.target = dbToGain (b.levelDb);
@@ -215,13 +377,16 @@ struct Band
         onMix.target = b.on ? 1.0 : 0.0;
     }
 
-    /** Au rythme de contrôle : dérives de CURRENT, coefficients de CURRENT et de DRIFT, saturation. */
+    /** Ampleur (dB) et période moyenne (s) de CURRENT selon son réglage (0 à 2). */
+    static double currentDepth (double amt)  { return amt <= 1.0 ? 1.8 * amt : 1.8 + 2.2 * (amt - 1.0); }
+    static double currentPeriod (double amt) { return 0.9 / (0.5 + 0.5 * std::min (amt, 2.0)); }
+
+    /** Au rythme de contrôle : dérives de CURRENT, coefficients de CURRENT et de DRIFT, saturation, rattrapage. */
     void control (double lo, double hi, int channels, Meters* m)
     {
         const double dt = controlStep / fs;
         for (int c = 0; c < 2; ++c) tape[c].update (drive.v);
         {
-            // rattrapage du niveau : énergie avant / après la saturation, sur 400 ms ; le gain rattrape l'écart
             const double a = 1.0 - std::exp (-dt / 0.4);
             envIn += a * (accIn - envIn); envOut += a * (accOut - envOut);
             accIn = accOut = 0.0;
@@ -234,57 +399,51 @@ struct Band
 
         const double amt = curAmt.next();
         curActive = amt > 1.0e-4;
-        const double logLo = std::log (lo), logHi = std::log (hi), span = logHi - logLo;
-        const double octaves = span / std::log (2.0);
-        const double q = std::clamp (2.2 / std::sqrt (std::max (octaves, 0.3)), 0.7, 2.4);
+        const double logLo = std::log (lo), span = std::log (hi) - logLo;
         if (curActive)
         {
-            // part commune : ±1,4 dB à 100 %, ±3 dB à 200 % ; part stéréo : jusqu'à ±0,2 de s (3,5 dB entre L et R)
-            // à 100 %, ±0,4 à 200 % ; plus vite quand on pousse
-            const double depthC = amt <= 1.0 ? 1.4 * amt : 1.4 + 1.6 * (amt - 1.0);
-            const double depthD = amt <= 1.0 ? 0.2 * amt : 0.2 + 0.2 * (amt - 1.0);
-            const double period = 2.2 / (0.6 + 0.6 * amt);
-            double g[3], mean = 0.0;
-            for (int i = 0; i < 3; ++i) { g[i] = depthC * wCommonG[i].tick (dt, period); mean += g[i]; }
-            mean /= 3.0;
-            for (int i = 0; i < 3; ++i)
+            const double depth = currentDepth (amt), period = currentPeriod (amt);
+            // les cloches couvrent la bande : une par sixième de bande, assez étroites pour ne pas se recouvrir
+            const double slotOct = span / std::log (2.0) / numCurrent;
+            const double q = std::clamp (1.4 / std::max (slotOct, 0.05), 1.2, 6.0);
+            for (int c = 0; c < channels; ++c)
             {
-                const double gi = g[i] - mean;           // moyenne nulle : le timbre d'origine est gardé
-                const double pos = (0.2 + 0.3 * i) + 0.12 * wCommonF[i].tick (dt, period * 1.7);
-                const double f = std::exp (logLo + span * std::clamp (pos, 0.05, 0.95));
-                for (int c = 0; c < 2; ++c) common[c][i].set (Svf::bell, f, q, gi, fs);
-                const double posD = (0.35 + 0.15 * i) + 0.25 * wDiffF[i].tick (dt, period * 1.3);
-                const double fd = std::exp (logLo + span * std::clamp (posD, 0.05, 0.95));
-                diff[i].set (Svf::bandpass, fd, q, 0.0, fs);
-                diffK[i] = 1.0 / q;                      // bande passante normalisée (gain 1 au centre)
-                diffW[i] = depthD * wDiffG[i].tick (dt, period * 0.9);
-                if (m != nullptr)
+                double g[numCurrent], mean = 0.0;
+                for (int i = 0; i < numCurrent; ++i) { g[i] = depth * wG[c][i].tick (dt, period); mean += g[i]; }
+                mean /= numCurrent;
+                for (int i = 0; i < numCurrent; ++i)
                 {
-                    m->curF[index][0][i].store ((float) f, std::memory_order_relaxed);
-                    m->curG[index][0][i].store ((float) gi, std::memory_order_relaxed);
-                    m->curQ[index][0][i].store ((float) q, std::memory_order_relaxed);
-                    m->curF[index][1][i].store ((float) fd, std::memory_order_relaxed);
-                    m->curG[index][1][i].store ((float) (channels == 2 ? diffW[i] : 0.0), std::memory_order_relaxed);
-                    m->curQ[index][1][i].store ((float) q, std::memory_order_relaxed);
+                    const double gi = g[i] - mean;     // moyenne nulle : le timbre d'origine est gardé
+                    const double pos = ((double) i + 0.5 + 0.4 * wF[c][i].tick (dt, period * 1.5)) / numCurrent;
+                    const double f = std::exp (logLo + span * std::clamp (pos, 0.02, 0.98));
+                    cur[c][i].set (Svf::bell, f, q, gi, fs);
+                    if (m != nullptr)
+                    {
+                        m->curF[index][c][i].store ((float) f, std::memory_order_relaxed);
+                        m->curG[index][c][i].store ((float) gi, std::memory_order_relaxed);
+                        m->curQ[index][c][i].store ((float) q, std::memory_order_relaxed);
+                    }
                 }
             }
+            if (m != nullptr && channels == 1)
+                for (int i = 0; i < numCurrent; ++i) m->curG[index][1][i].store (m->curG[index][0][i].load(), std::memory_order_relaxed);
         }
         else if (m != nullptr)
-            for (int c = 0; c < 2; ++c) for (int i = 0; i < 3; ++i) m->curG[index][c][i].store (0.0f, std::memory_order_relaxed);
+            for (int c = 0; c < 2; ++c) for (int i = 0; i < numCurrent; ++i) m->curG[index][c][i].store (0.0f, std::memory_order_relaxed);
 
         const double da = driftAmt.next();
         driftActive = da > 1.0e-4 && channels == 2;
         if (driftActive)
         {
-            // le centre de la bande glisse vers le haut à gauche, vers le bas à droite : (1 + a) / (1 - a) = 6 dB à 100 %
+            // le centre de la bande s'écarte : vers le haut à gauche, vers le bas à droite
             const double fc = std::sqrt (lo * hi), r = std::pow (hi / lo, 0.25);
             driftLo.set (Svf::bandpass, fc / r, 0.9, 0.0, fs);
             driftHi.set (Svf::bandpass, fc * r, 0.9, 0.0, fs);
-            driftA = da / 3.0; driftK = 1.0 / 0.9;
+            driftA = da * driftStrength; driftK = 1.0 / 0.9;
         }
         if (m != nullptr)
         {
-            m->driftDb[index].store (driftActive ? (float) gainToDb ((1.0 + da / 3.0) / (1.0 - da / 3.0)) : 0.0f, std::memory_order_relaxed);
+            m->driftDb[index].store (driftActive ? (float) gainToDb ((1.0 + driftA) / (1.0 - driftA)) : 0.0f, std::memory_order_relaxed);
             m->leanDb[index].store (channels == 2 ? (float) gainToDb ((1.0 + lean.v) / (1.0 - lean.v)) : 0.0f, std::memory_order_relaxed);
         }
     }
@@ -312,17 +471,16 @@ struct Band
                     accIn += x * x; accOut += s * s;
                     y = x + mix * (s * makeup - x);
                 }
-                if (curActive) for (auto& f : common[c]) y = f.process (y);
+                if (curActive) for (auto& f : cur[c]) y = f.process (y);
                 y = x + on * (y - x);
             }
             io[c] = y;
         }
-        if (channels == 2 && on > 1.0e-6)
+        if (channels == 2 && on > 1.0e-6 && (driftActive || std::abs (ln) > 1.0e-7))
         {
-            // la part stéréo : un signal s tiré du centre, ajouté à gauche, retranché à droite
+            // la part stéréo de DRIFT et LEAN : un signal s tiré du centre, ajouté à gauche, retranché à droite
             const double mid = 0.5 * (io[0] + io[1]);
             double s = ln * mid;
-            if (curActive) for (int i = 0; i < 3; ++i) s += diffW[i] * diffK[i] * diff[i].process (mid);
             if (driftActive) s += driftA * driftK * (driftHi.process (mid) - driftLo.process (mid));
             s *= on;
             io[0] += s; io[1] -= s;
@@ -331,11 +489,8 @@ struct Band
         rms[0] += 0.0005 * (l * l - rms[0]);
         rms[1] += 0.0005 * (r * r - rms[1]);
     }
-
-    double makeup = 1.0, envIn = 0.0, envOut = 0.0, accIn = 0.0, accOut = 0.0;   // rattrapage du niveau moyen
-    static inline double dbToGainFast (double db) { return std::exp (db * 0.11512925464970229); }
-    static inline double gainToDbFast (double g) { return 8.685889638065035 * std::log (std::max (g, 1.0e-12)); }
 };
+
 
 //==============================================================================
 /** COLOR : trois couleurs de boîtier, chacune une égalisation de caractère ET un comportement (harmoniques du grave
@@ -488,22 +643,23 @@ struct Color
 };
 
 //==============================================================================
-/** SURGICAL : deux cloches de coupe, BOXY (le carton, 150–1000 Hz) et HARSH (la dureté, 1,5–8 kHz). PRE ou POST : avant
-    ou après la saturation. Changer de place se fait sans clic : les coupes s'effacent, changent de place, reviennent.
-    Éteintes, elles ne calculent rien (transparence au bit près). */
+/** SURGICAL : deux cloches de coupe, BOXY (le carton, 200–700 Hz) et HARSH (la dureté, 2,5–4,5 kHz), chacune une
+    fréquence et une coupe (0 = rien). PRE ou POST : avant ou après la saturation. Changer de place se fait sans clic :
+    les coupes s'effacent, changent de place, reviennent. Sans coupe, rien n'est calculé (transparence au bit près). */
 struct Surgical
 {
+    static constexpr double boxyQ = 1.3, harshQ = 1.8;
     double fs = 48000.0;
     Svf boxy[2], harsh[2];
-    Smooth bGain, hGain, bFreq, hFreq, bQ, hQ;
+    Smooth bGain, hGain, bFreq, hFreq;
     bool post = false, wantPost = false, active = false;
 
     void prepare (double rate)
     {
         fs = rate;
         const double ctl = rate / controlStep;
-        for (auto* s : { &bGain, &hGain }) s->setTime (0.06, ctl);
-        for (auto* s : { &bFreq, &hFreq, &bQ, &hQ }) s->setTime (0.04, ctl);
+        for (auto* s : { &bGain, &hGain }) s->setTime (0.1, ctl);
+        for (auto* s : { &bFreq, &hFreq }) s->setTime (0.04, ctl);
         reset();
     }
     void reset() { for (int c = 0; c < 2; ++c) { boxy[c].reset(); harsh[c].reset(); } }
@@ -511,24 +667,23 @@ struct Surgical
     void snap (const EngineParams& p)
     {
         post = wantPost = p.surgicalPost;
-        bGain.snap (p.boxyOn ? p.boxyDepth : 0.0); hGain.snap (p.harshOn ? p.harshDepth : 0.0);
-        bFreq.snap (std::log (p.boxyFreq)); hFreq.snap (std::log (p.harshFreq)); bQ.snap (p.boxyQ); hQ.snap (p.harshQ);
+        bGain.snap (std::min (0.0, p.boxyCut)); hGain.snap (std::min (0.0, p.harshCut));
+        bFreq.snap (std::log (p.boxyFreq)); hFreq.snap (std::log (p.harshFreq));
     }
 
     void setTargets (const EngineParams& p)
     {
         wantPost = p.surgicalPost;
         const bool moving = wantPost != post;
-        bGain.target = moving || ! p.boxyOn ? 0.0 : p.boxyDepth;
-        hGain.target = moving || ! p.harshOn ? 0.0 : p.harshDepth;
+        bGain.target = moving ? 0.0 : std::min (0.0, p.boxyCut);
+        hGain.target = moving ? 0.0 : std::min (0.0, p.harshCut);
         bFreq.target = std::log (p.boxyFreq); hFreq.target = std::log (p.harshFreq);
-        bQ.target = p.boxyQ; hQ.target = p.harshQ;
     }
 
     void control (int channels)
     {
         const double bg = bGain.next(), hg = hGain.next();
-        const double bf = std::exp (bFreq.next()), hf = std::exp (hFreq.next()), bq = bQ.next(), hq = hQ.next();
+        const double bf = std::exp (bFreq.next()), hf = std::exp (hFreq.next());
         // place changée : quand les deux coupes sont effacées, on déplace
         if (wantPost != post && std::abs (bg) < 0.01 && std::abs (hg) < 0.01)
         {
@@ -538,8 +693,8 @@ struct Surgical
         active = std::abs (bg) > 1.0e-4 || std::abs (hg) > 1.0e-4;
         for (int c = 0; c < channels; ++c)
         {
-            boxy[c].set (Svf::bell, bf, bq, bg, fs);
-            harsh[c].set (Svf::bell, hf, hq, hg, fs);
+            boxy[c].set (Svf::bell, bf, boxyQ, bg, fs);
+            harsh[c].set (Svf::bell, hf, harshQ, hg, fs);
         }
     }
 
@@ -551,8 +706,9 @@ struct Surgical
 };
 
 //==============================================================================
-/** Le cœur suréchantillonné : séparation, bandes, chirurgie, couleur. Prépare ses coefficients sans allouer : on peut le
-    remettre à un autre taux pendant la lecture (changement de suréchantillonnage, en fondu). */
+/** Le cœur suréchantillonné : (correction LINEAR PHASE), séparation, bandes, chirurgie, couleur. Prépare ses
+    coefficients sans allouer : on peut le remettre à un autre taux pendant la lecture (fondu). La convolution de LINEAR
+    PHASE appartient au moteur (une par facteur, préparée d'avance) : le cœur ne fait que s'en servir. */
 struct Core
 {
     double fs = 96000.0;
@@ -562,10 +718,11 @@ struct Core
     Surgical surgical;
     Smooth logX[3];
     int counter = 0;
+    Convolver* linear = nullptr;                  // non nul : LINEAR PHASE en service
 
-    void prepareRate (double rate, const EngineParams& p, int channels)
+    void prepareRate (double rate, const EngineParams& p, int channels, Convolver* conv)
     {
-        fs = rate;
+        fs = rate; linear = conv;
         const double ctl = rate / controlStep;
         for (int i = 0; i < 3; ++i) logX[i].setTime (0.05, ctl);
         for (int b = 0; b < numBands; ++b) bands[b].prepare (rate, b, 0xC0FFEEull + 7919ull * (uint64_t) (b + 1));
@@ -616,6 +773,11 @@ struct Core
     /** n échantillons, en place, au taux du cœur. */
     void process (float* l, float* r, int n, int channels, Meters* m)
     {
+        if (linear != nullptr)
+        {
+            float* chans[2] { l, r };
+            linear->process (chans, n);
+        }
         for (int i = 0; i < n; ++i)
         {
             if (counter == 0) control (channels, m);
@@ -656,26 +818,37 @@ public:
     {
         fs = sampleRate; channels = std::clamp (channelCount, 1, 2);
         maxN = std::max (16, maxBlock);
+        linearBase = std::max (1, (int) std::lround (linearSeconds * fs));
         for (int f = 0; f < 4; ++f)
         {
-            if (f == 0) { os[0].reset(); continue; }
-            os[f] = std::make_unique<juce::dsp::Oversampling<float>> ((size_t) 2, (size_t) f,
-                        juce::dsp::Oversampling<float>::filterHalfBandFIREquiripple, true, true);
-            os[f]->initProcessing ((size_t) maxN);
+            if (f > 0)
+            {
+                os[f] = std::make_unique<juce::dsp::Oversampling<float>> ((size_t) 2, (size_t) f,
+                            juce::dsp::Oversampling<float>::filterHalfBandFIREquiripple, true, false);
+                os[f]->initProcessing ((size_t) maxN);
+            }
+            else os[f].reset();
+            // LINEAR PHASE : une convolution par facteur, préparée ici (rien n'est alloué pendant la lecture). Retard
+            // total (réponse retournée + un bloc) : exactement linearBase échantillons au taux de base.
+            const int blk = 256 * (1 << f);
+            irLength[f] = linearBase * (1 << f) - blk + 1;
+            conv[f] = std::make_unique<Convolver>();
+            conv[f]->prepare (blk, irLength[f], channels);
         }
         // latences mesurées (impulsion à travers chaque suréchantillonnage, traitement neutre)
         for (int f = 0; f < 4; ++f) latency[f] = measureLatency (f);
         for (int f = 0; f < 4; ++f) if (os[f] != nullptr) os[f]->reset();
+        double x[3] { p.xover[0], p.xover[1], p.xover[2] };
+        loadLinear (x, true);
 
-        work.setSize (2, maxN, false, true, false);
         dry.setSize (2, maxN, false, true, false);
-        fadeBuf.setSize (2, maxN * 8, false, true, false);
+        fadeBuf.setSize (2, maxN, false, true, false);
         delayLine.setSize (2, delaySize, false, true, false);
         delayLine.clear(); writePos = 0;
 
-        active = std::clamp (p.os, 0, 3);
-        cores[0].prepareRate (fs * (1 << active), p, channels);
-        coreOs[0] = active; current = 0; fading = false; fadePos = 0;
+        active = std::clamp (p.os, 0, 3); activeLinear = p.linear;
+        cores[0].prepareRate (fs * (1 << active), p, channels, activeLinear ? conv[active].get() : nullptr);
+        coreOs[0] = active; coreLinear[0] = activeLinear; current = 0; fading = false; fadePos = 0;
         fadeLen = std::max (1, (int) (0.04 * fs));
 
         for (auto& s : { &inGain, &outGain }) s->setTime (0.02, fs);
@@ -684,13 +857,36 @@ public:
         bypassV = p.bypass ? 1.0 : 0.0;
         for (int c = 0; c < 2; ++c) { inHp[c].reset(); inLp[c].reset(); outHp[c].reset(); outLp[c].reset();
                                       inHp[c].lastF = inLp[c].lastF = outHp[c].lastF = outLp[c].lastF = -1.0; }
-        for (auto& v : peakHold) v = 0.0;
-        latencyShared.store (latency[active]);
+        latencyShared.store (latencyOf (active, activeLinear));
     }
 
-    int getLatency() const { return latency[active]; }
+    /** LINEAR PHASE : recalcule les corrections quand les séparations changent. Thread des messages (la convolution
+        prépare la nouvelle réponse à part et la fond elle-même dans la lecture). */
+    void loadLinear (double x[3], bool now = false)
+    {
+        orderCrossovers (x);
+        bool same = ! now;
+        for (int i = 0; i < 3; ++i) same &= std::abs (x[i] - linearX[i]) < 0.5;
+        if (same) return;
+        bool all = true;
+        for (int f = 0; f < 4; ++f)
+        {
+            if (! now && loadedX[f][0] > 0.0 && std::abs (loadedX[f][0] - x[0]) < 0.5 && std::abs (loadedX[f][1] - x[1]) < 0.5
+                && std::abs (loadedX[f][2] - x[2]) < 0.5) continue;
+            std::vector<float> ir ((size_t) irLength[f]);
+            Crossover::inverseAllpass (x, fs * (1 << f), ir.data(), irLength[f]);
+            if (now) conv[f]->setResponseNow (ir.data(), irLength[f]);
+            else if (! conv[f]->setResponse (ir.data(), irLength[f])) { all = false; continue; }   // reprise au tour suivant
+            for (int i = 0; i < 3; ++i) loadedX[f][i] = x[i];
+        }
+        if (all) for (int i = 0; i < 3; ++i) linearX[i] = x[i];
+    }
+
+    int latencyOf (int factor, bool linear) const { return latency[std::clamp (factor, 0, 3)] + (linear ? linearBase : 0); }
+    int getLatency() const { return latencyOf (active, activeLinear); }
     int getLatencyShared() const { return latencyShared.load(); }
     int latencyFor (int factor) const { return latency[std::clamp (factor, 0, 3)]; }
+    int linearLatency() const { return linearBase; }
 
     static double effectiveOut (const EngineParams& p) { return p.gainLink ? p.outDb - p.inDb : p.outDb; }
 
@@ -741,17 +937,18 @@ private:
             }
         }
 
-        // le facteur de suréchantillonnage a changé : le nouveau cœur part en fondu
+        // suréchantillonnage ou LINEAR PHASE changés : le nouveau cœur se remplit, puis un fondu
         const int want = std::clamp (p.os, 0, 3);
-        if (want != coreOs[current] && ! fading)
+        if ((want != coreOs[current] || p.linear != coreLinear[current]) && ! fading)
         {
             const int other = 1 - current;
             if (os[want] != nullptr) os[want]->reset();
-            cores[other].prepareRate (fs * (1 << want), p, ch);
-            // le nouveau chemin se remplit d'abord (ses filtres de suréchantillonnage partent vides), puis le fondu
-            coreOs[other] = want; fading = true; fadePos = -(latency[want] + 2 * controlStep);
-            active = want;
-            latencyShared.store (latency[want]);
+            if (p.linear) conv[want]->reset();
+            cores[other].prepareRate (fs * (1 << want), p, ch, p.linear ? conv[want].get() : nullptr);
+            coreOs[other] = want; coreLinear[other] = p.linear;
+            fading = true; fadePos = -(latencyOf (want, p.linear) + 2 * controlStep);
+            active = want; activeLinear = p.linear;
+            latencyShared.store (latencyOf (want, p.linear));
         }
 
         cores[current].setTargets (p);
@@ -784,7 +981,7 @@ private:
             outLp[c].set (false, std::min (p.outLp, 21000.0), p.outSlope, fs);
         }
         const bool ohp = ! hpOff (p.outHp), olp = ! lpOff (p.outLp);
-        const int lat = latency[coreOs[current]];
+        const int lat = latencyOf (coreOs[current], coreLinear[current]);
         for (int i = 0; i < n; ++i)
         {
             const double g = outGain.next();
@@ -817,6 +1014,19 @@ private:
         }
         juce::dsp::AudioBlock<float> block (io.getArrayOfWritePointers(), (size_t) ch, (size_t) io.getNumSamples());
         auto up = os[f]->processSamplesUp (block);
+        // le complément jusqu'à l'échantillon entier (retard fractionnaire du suréchantillonnage, mesuré)
+        if (osPad[f] > 0)
+            for (int c = 0; c < ch; ++c)
+            {
+                float* s = up.getChannelPointer ((size_t) c);
+                auto& ring = padRing[which][c];
+                for (size_t i = 0; i < up.getNumSamples(); ++i)
+                {
+                    ring[(size_t) padPos[which][c]] = s[i];
+                    padPos[which][c] = (padPos[which][c] + 1) % (osPad[f] + 1);
+                    s[i] = ring[(size_t) padPos[which][c]];
+                }
+            }
         cores[which].process (up.getChannelPointer (0), ch > 1 ? up.getChannelPointer (1) : nullptr, (int) up.getNumSamples(), ch, m);
         os[f]->processSamplesDown (block);
     }
@@ -830,8 +1040,6 @@ private:
         b.setSample (0, 0, 1.0f); b.setSample (1, 0, 1.0f);
         os[f]->reset();
         int pos = 0;
-        std::vector<float> outv;
-        outv.reserve ((size_t) len);
         while (pos < len)
         {
             const int k = std::min (maxN, len - pos);
@@ -841,10 +1049,15 @@ private:
             os[f]->processSamplesDown (blk);
             pos += k;
         }
-        // le centre de gravité de l'énergie de la réponse (filtres à phase linéaire : symétrique), arrondi
+        // le centre de gravité de l'énergie de la réponse : pour ces filtres à phase linéaire (réponse symétrique), c'est
+        // leur retard exact, souvent fractionnaire ; on le complète jusqu'à l'échantillon entier suivant par un retard
+        // dans le domaine suréchantillonné (osPad), et l'alignement est exact
         double e = 0.0, t = 0.0;
         for (int i = 0; i < len; ++i) { const double v = b.getSample (0, i); e += v * v; t += v * v * i; }
-        return e > 0.0 ? (int) std::lround (t / e) : 0;
+        const double d = e > 0.0 ? std::round (t / e * (1 << f)) / (1 << f) : 0.0;
+        const int whole = (int) std::ceil (d - 1.0e-9);
+        osPad[f] = (int) std::lround ((whole - d) * (1 << f));
+        return whole;
     }
 
     void pushDelay (const juce::AudioBuffer<float>& src, int ch, int n)
@@ -888,18 +1101,25 @@ private:
     double fs = 48000.0;
     int channels = 2, maxN = 512;
     std::unique_ptr<juce::dsp::Oversampling<float>> os[4];
-    int latency[4] {};
+    std::unique_ptr<Convolver> conv[4];
+    double loadedX[4][3] {};
+    int irLength[4] {}, linearBase = 4800;
+    double linearX[3] { -1.0, -1.0, -1.0 };
+    int latency[4] {}, osPad[4] {};
+    std::array<float, 16> padRing[2][2] {};
+    int padPos[2][2] {};
     std::atomic<int> latencyShared { 0 };
     int active = 1;
+    bool activeLinear = false;
     Core cores[2];
     int coreOs[2] { 1, 1 }, current = 0, fadePos = 0, fadeLen = 1;
+    bool coreLinear[2] { false, false };
     bool fading = false;
-    juce::AudioBuffer<float> work, dry, fadeBuf, delayLine;
-    static constexpr int delaySize = 16384;
+    juce::AudioBuffer<float> dry, fadeBuf, delayLine;
+    static constexpr int delaySize = 65536;
     int writePos = 0;
     Smooth inGain, outGain;
     double bypassV = 0.0, bypassStep = 0.001;
     ButterCascade inHp[2], inLp[2], outHp[2], outLp[2];
-    double peakHold[2] {};
 };
 } // namespace vision

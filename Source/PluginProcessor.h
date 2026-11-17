@@ -69,6 +69,7 @@ private:
     params::Reader reader { apvts };
     vision::Engine engine;
     std::atomic<bool> prepared { false };
+    juce::CriticalSection linearLock;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (VisionProcessor)
 };

@@ -57,20 +57,36 @@ public:
     void setScale (float s) { scale = s; resized(); }
     void setLabel (const juce::String& t) { if (label != t) { label = t; slider.setTitle (t); repaint(); } }
     void setTip (const juce::String& t) { slider.setTooltip (t); }
+    /** Disposition de VISION : le nom sous le potard, MIN et MAX aux bouts de la course, la valeur au survol seulement
+        (à la place du nom). */
+    void setBelow (bool b) { below = b; resized(); repaint(); }
 
     void resized() override
     {
         auto r = getLocalBounds().toFloat();
-        r.removeFromTop (labelH());
-        r.removeFromBottom (valueH());
+        if (below) { r.removeFromBottom (labelH() + 10.0f * scale); }
+        else { r.removeFromTop (labelH()); r.removeFromBottom (valueH()); }
         slider.setBounds (r.toNearestInt());
     }
 
     void paint (juce::Graphics& g) override
     {
         const auto b = getLocalBounds().toFloat();
-        text (g, label, b.withHeight (labelH()), font (Face::body, 10.5f * scale, 0.16f), haze);
         const bool live = slider.isMouseOverOrDragging();
+        if (below)
+        {
+            const auto k = slider.getBounds().toFloat();
+            const float d = std::min (k.getWidth(), k.getHeight());
+            const auto c = k.getCentre();
+            const auto mf = font (Face::body, 7.5f * scale, 0.12f);
+            text (g, "MIN", juce::Rectangle<float> (24 * scale, 10 * scale).withCentre ({ c.x - d * 0.30f, c.y + d * 0.47f }), mf, dim);
+            text (g, "MAX", juce::Rectangle<float> (24 * scale, 10 * scale).withCentre ({ c.x + d * 0.30f, c.y + d * 0.47f }), mf, dim);
+            const auto lr = b.withTrimmedTop (b.getHeight() - labelH());
+            if (live) text (g, param.getCurrentValueAsText(), lr, font (Face::mono, 10.5f * scale), onirique::look::emberPink);
+            else text (g, label, lr, font (Face::display, 9.0f * scale, 0.16f), bone);
+            return;
+        }
+        text (g, label, b.withHeight (labelH()), font (Face::body, 10.5f * scale, 0.16f), haze);
         text (g, param.getCurrentValueAsText(), b.withTrimmedTop (b.getHeight() - valueH()), font (Face::mono, 10.5f * scale),
               live ? onirique::look::emberPink : bone.withAlpha (0.85f));
     }
@@ -84,6 +100,7 @@ private:
     juce::String label;
     juce::SliderParameterAttachment attachment;
     float scale = 1.0f;
+    bool below = false;
 };
 
 //==============================================================================

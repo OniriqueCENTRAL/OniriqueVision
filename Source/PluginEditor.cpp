@@ -8,42 +8,42 @@ const juce::String pluginName = "ONIRIQUE VISION";
 using R = juce::Rectangle<float>;
 juce::String fr (const char* s) { return juce::String::fromUTF8 (s); }
 
-const juce::Point<float> big { 96, 118 }, medium { 80, 100 }, small { 66, 84 }, tiny { 58, 74 };
-
 namespace layout
 {
-const R left { 14, 104, 190, 682 }, right { 1036, 104, 190, 682 };
-const R view { 214, 104, 812, 284 }, bands { 214, 396, 812, 294 }, surgical { 214, 698, 812, 88 };
-constexpr float column = 203.0f;
+const R left { 14, 98, 178, 790 }, right { 1108, 98, 178, 790 };
+const R view { 214, 98, 872, 410 }, bands { 214, 516, 872, 372 };
+constexpr float colCentre[4] { 289, 439, 861, 1011 };
+constexpr float middle = 650;
+const juce::Point<float> knob { 96, 116 }, gainKnob { 100, 120 };
 }
 } // namespace
 
 //==============================================================================
 VisionEditor::BandControls::BandControls (VisionEditor& e, int b)
-    : on (e.p (params::bandOn (b)), "ON"), solo (e.p (params::bandSolo (b)), "S"),
-      sat (e.p (params::bandSat (b)), "SATURATION", e.knobLook), current (e.p (params::bandCurrent (b)), "CURRENT", e.knobLook),
-      drift (e.p (params::bandDrift (b)), "DRIFT", e.knobLook),
-      lean (e.p (params::bandLean (b)), { "OFF", "L", "R" })
+    : drift (e.p (params::bandDrift (b)), ui::SquareButton::toggle),
+      lean (e.p (params::bandLean (b)), ui::SquareButton::cycle, 0, { "", "L", "R" }),
+      current (e.p (params::bandCurrent (b)), "CURRENT", e.knobLook),
+      sat (e.p (params::bandSat (b)), "SATURATION", e.knobLook)
 {
+    current.setBelow (true);
+    sat.setBelow (true);
 }
 
 VisionEditor::VisionEditor (VisionProcessor& proc)
     : AudioProcessorEditor (proc), processor (proc),
-      colorSeg (p (params::color), { "OFF", "INFRA", "TERRA", "SUPRA" }),
-      typeSeg (p (params::satType), { "TAPE", "TUBE", "TRANS" }),
-      osSeg (p (params::osRealtime), { "1x", "2x", "4x", "8x" }),
-      hyper (p (params::hyper), "HYPER MODE"),
+      colors (p (params::color)),
       view (proc.apvts, proc.meters()),
+      tape (p (params::satType), ui::SquareButton::radio, 0), tube (p (params::satType), ui::SquareButton::radio, 1),
+      trans (p (params::satType), ui::SquareButton::radio, 2),
+      pre (p (params::surgicalPost), ui::SquareButton::radio, 0), post (p (params::surgicalPost), ui::SquareButton::radio, 1),
+      boxyFreq (p (params::boxyFreq), "700", "200"), boxyCut (p (params::boxyCut), "0", "-12"),
+      harshCut (p (params::harshCut), "0", "-12"), harshFreq (p (params::harshFreq), "4.5K", "2.5K"),
       inMeter (proc.meters(), false), outMeter (proc.meters(), true),
-      inGain (p (params::inGain), "INPUT", knobLook, true), outGain (p (params::outGain), "OUTPUT", knobLook, true),
-      inHp (p (params::inHp), "HIGH PASS", knobLook), inLp (p (params::inLp), "LOW PASS", knobLook),
-      outHp (p (params::outHp), "HIGH PASS", knobLook), outLp (p (params::outLp), "LOW PASS", knobLook),
-      link (p (params::gainLink), "GAIN LINK"),
-      inSlope (p (params::inSlope), { "12", "24", "48" }), outSlope (p (params::outSlope), { "12", "24", "48" }),
-      boxyOn (p (params::boxyOn), "BOXY"), harshOn (p (params::harshOn), "HARSH"),
-      boxyFreq (p (params::boxyFreq), "FREQ", knobLook), boxyDepth (p (params::boxyDepth), "DEPTH", knobLook), boxyQ (p (params::boxyQ), "Q", knobLook),
-      harshFreq (p (params::harshFreq), "FREQ", knobLook), harshDepth (p (params::harshDepth), "DEPTH", knobLook), harshQ (p (params::harshQ), "Q", knobLook),
-      position (p (params::surgicalPost), { "PRE", "POST" }),
+      inHp (p (params::inHp), "HP"), inLp (p (params::inLp), "LP"), outHp (p (params::outHp), "HP"), outLp (p (params::outLp), "LP"),
+      inReadout (p (params::inGain)), outReadout (p (params::outGain)),
+      inGain (p (params::inGain), "GAIN", knobLook, true), outGain (p (params::outGain), "GAIN", knobLook, true),
+      link (p (params::gainLink)),
+      linear (p (params::linear), "LINEAR PHASE"),
       undoButton (ui::IconButton::undo, fr ("Annuler")), redoButton (ui::IconButton::redo, fr ("Rétablir")),
       helpButton (ui::IconButton::help, fr ("Aide")), settingsButton (ui::IconButton::settings, fr ("Réglages")),
       bar (proc.presets, proc.apvts, "VISION", {}, baseWidth, baseWidth)
@@ -61,28 +61,26 @@ VisionEditor::VisionEditor (VisionProcessor& proc)
         if (const char* data = BinaryData::getNamedResource ("logo_png", size))
             logo = juce::ImageFileFormat::loadFrom (data, (size_t) size);
     }
+    inGain.setBelow (true);
+    outGain.setBelow (true);
 
     for (juce::Component* c : std::initializer_list<juce::Component*> {
-             &colorSeg, &typeSeg, &osSeg, &hyper, &view, &inMeter, &outMeter, &inGain, &outGain, &inHp, &inLp, &outHp, &outLp,
-             &link, &inSlope, &outSlope, &boxyOn, &harshOn, &boxyFreq, &boxyDepth, &boxyQ, &harshFreq, &harshDepth, &harshQ,
-             &position, &undoButton, &redoButton, &helpButton, &settingsButton })
+             &colors, &view, &tape, &tube, &trans, &pre, &post, &boxyFreq, &boxyCut, &harshCut, &harshFreq,
+             &inMeter, &outMeter, &inHp, &inLp, &outHp, &outLp, &inReadout, &outReadout, &inGain, &outGain, &link,
+             &linear, &undoButton, &redoButton, &helpButton, &settingsButton })
         addAndMakeVisible (c);
     for (int b = 0; b < vision::numBands; ++b)
     {
         bands[b] = std::make_unique<BandControls> (*this, b);
         auto& bc = *bands[b];
-        for (juce::Component* c : std::initializer_list<juce::Component*> { &bc.on, &bc.solo, &bc.sat, &bc.current, &bc.drift, &bc.lean })
+        for (juce::Component* c : std::initializer_list<juce::Component*> { &bc.drift, &bc.lean, &bc.current, &bc.sat })
             addAndMakeVisible (c);
         addKnobMenu (bc.sat, params::bandSat (b), b, "Sat");
         addKnobMenu (bc.current, params::bandCurrent (b), b, "Current");
-        addKnobMenu (bc.drift, params::bandDrift (b), b, "Drift");
     }
-    addKnobMenu (inGain, params::inGain); addKnobMenu (outGain, params::outGain);
-    addKnobMenu (inHp, params::inHp); addKnobMenu (inLp, params::inLp); addKnobMenu (outHp, params::outHp); addKnobMenu (outLp, params::outLp);
-    addKnobMenu (boxyFreq, params::boxyFreq); addKnobMenu (boxyDepth, params::boxyDepth); addKnobMenu (boxyQ, params::boxyQ);
-    addKnobMenu (harshFreq, params::harshFreq); addKnobMenu (harshDepth, params::harshDepth); addKnobMenu (harshQ, params::harshQ);
+    addKnobMenu (inGain, params::inGain);
+    addKnobMenu (outGain, params::outGain);
 
-    view.onSelect = [this] (int) { repaint(); };
     undoButton.onClick = [this] { processor.undo.undo(); };
     redoButton.onClick = [this] { processor.undo.redo(); };
     settingsButton.onClick = [this] { showSettings(); };
@@ -104,7 +102,7 @@ VisionEditor::VisionEditor (VisionProcessor& proc)
 
     // la taille gardée se lit AVANT de poser les limites (setResizeLimits redimensionne déjà l'éditeur)
     auto heightFor = [] (int w) { return juce::roundToInt ((float) w * (float) baseHeight / (float) baseWidth); };
-    const int minW = juce::roundToInt (baseWidth * 0.7f), maxW = baseWidth * 2;
+    const int minW = juce::roundToInt (baseWidth * 0.65f), maxW = baseWidth * 2;
     const auto size = onirique::window::openingSize (processor.apvts.state, pluginName, { baseWidth, heightFor (baseWidth) },
                                                      { minW, heightFor (minW) }, { maxW, heightFor (maxW) });
     setResizable (true, true);
@@ -123,7 +121,7 @@ VisionEditor::VisionEditor (VisionProcessor& proc)
     helpButton.setToggleState (help, juce::dontSendNotification);
     setHelp (help);
     updateTips();
-    startTimerHz (30);
+    startTimerHz (20);
 
     // essais locaux : ONIRIQUE_UI_PNG=fichier → l'interface s'écrit elle-même en PNG (rendu logiciel, x2)
     if (auto* png = std::getenv ("ONIRIQUE_UI_PNG"))
@@ -175,10 +173,11 @@ void VisionEditor::timerCallback()
     // la couleur d'interface choisie dans une autre fenêtre de ce plugin
     if (onirique::look::changedSince (themeSeen) && bar.onThemeChanged) bar.onThemeChanged();
 
-    // une bande éteinte s'estompe, une bande coupée par le solo d'une autre aussi
+    // une bande éteinte ou coupée par le solo d'une autre s'estompe
     const auto prm = processor.readParams();
     bool anySolo = false;
     for (auto& b : prm.band) anySolo |= b.solo;
+    const bool stereo = processor.meters().stereo.load() != 0;
     for (int b = 0; b < vision::numBands; ++b)
     {
         const float target = prm.band[b].on && (! anySolo || prm.band[b].solo) ? 1.0f : 0.45f;
@@ -186,57 +185,59 @@ void VisionEditor::timerCallback()
         for (juce::Component* c : std::initializer_list<juce::Component*> { &bc.sat, &bc.current, &bc.drift, &bc.lean })
         {
             const float a = c->getAlpha();
-            if (std::abs (a - target) > 0.01f) c->setAlpha (a + (target - a) * 0.25f);
+            if (std::abs (a - target) > 0.01f) c->setAlpha (a + (target - a) * 0.3f);
         }
+        // DRIFT et LEAN n'agissent que sur une sortie stéréo
+        bc.drift.setEnabled (stereo);
+        bc.lean.setEnabled (stereo);
     }
-    // DRIFT et LEAN n'agissent que sur une sortie stéréo
-    const bool stereo = processor.meters().stereo.load() != 0;
-    for (auto& bc : bands) { bc->drift.setEnabled (stereo); bc->lean.setEnabled (stereo); }
-
     undoButton.setEnabled (processor.undo.canUndo());
     redoButton.setEnabled (processor.undo.canRedo());
 }
 
 void VisionEditor::updateTips()
 {
-    colorSeg.setTooltip (fr ("COLOR : la couleur du boîtier, sous le capot.\nINFRA : du poids dans le grave, un médium présent, l'ensemble assombri, la boue tenue.\n"
-                             "TERRA : une courbe « hype » équilibrée : grave et aigu relevés, la boue resserrée (et creusée un peu plus quand elle déborde), le médium adouci.\n"
-                             "SUPRA : de l'air et de l'ouverture dans le haut, sans dureté : le haut-médium dur recule quand il dépasse.\nOFF : aucune couleur."));
-    typeSeg.setTooltip (fr ("SATURATION, pour les quatre bandes (la quantité se règle par bande).\nTAPE : bande magnétique, compression progressive, transitoires arrondies, aigus adoucis.\n"
-                            "TUBE : triode, harmoniques paires, chaleur, compression douce.\nTRANS : transformateur, le grave sature d'abord, les attaques passent, densité."));
-    osSeg.setTooltip (fr ("Suréchantillonnage de la lecture : moins de repliement quand on sature fort. Le rendu hors ligne a le sien (réglages)."));
-    hyper.setTooltip (fr ("HYPER MODE : double la profondeur du drive de toutes les bandes. Le niveau de sortie reste rattrapé."));
-    view.setTooltip (fr ("Les quatre bandes. Tirer un rond en haut : déplacer une séparation. Tirer une poignée : le niveau de la bande (molette aussi, double-clic : 0 dB). "
-                         "Courbe rouge : la gauche, courbe claire : la droite, telles que CURRENT, DRIFT et LEAN les font bouger en ce moment."));
-    inGain.setTip (fr ("INPUT : le niveau d'entrée. Plus haut, les saturations travaillent plus fort."));
-    outGain.setTip (fr ("OUTPUT : le niveau de sortie."));
-    link.setTooltip (fr ("GAIN LINK : la sortie compense l'entrée (monter l'entrée de 6 dB baisse la sortie de 6 dB), pour comparer à volume égal."));
-    inHp.setTip (fr ("Passe-haut d'entrée, avant tout le traitement. Tout à gauche : OFF."));
-    inLp.setTip (fr ("Passe-bas d'entrée, avant tout le traitement. Tout à droite : OFF."));
-    outHp.setTip (fr ("Passe-haut de sortie, après tout le traitement. Tout à gauche : OFF."));
-    outLp.setTip (fr ("Passe-bas de sortie, après tout le traitement. Tout à droite : OFF."));
-    inSlope.setTooltip (fr ("Pente des filtres d'entrée, en dB par octave (Butterworth)."));
-    outSlope.setTooltip (fr ("Pente des filtres de sortie, en dB par octave (Butterworth)."));
-    boxyOn.setTooltip (fr ("BOXY : coupe la zone qui sonne carton, fermée, résonante (150 Hz - 1 kHz)."));
-    harshOn.setTooltip (fr ("HARSH : coupe la zone agressive, dure, le haut-médium trop présent (1,5 - 8 kHz)."));
-    for (auto* k : { &boxyFreq, &harshFreq }) k->setTip (fr ("Fréquence de la coupe."));
-    for (auto* k : { &boxyDepth, &harshDepth }) k->setTip (fr ("Profondeur de la coupe, jusqu'à -18 dB."));
-    for (auto* k : { &boxyQ, &harshQ }) k->setTip (fr ("Largeur de la coupe : plus Q est haut, plus elle est étroite."));
-    position.setTooltip (fr ("PRE : les coupes agissent avant la saturation (elle ne grossit pas ce qui a été retiré). POST : après."));
+    colors.setTooltip (fr ("La couleur du boîtier, sous le capot (un second clic l'éteint).\nINFRA : du poids dans le grave, un médium présent, "
+                           "l'ensemble assombri, la boue tenue. Un bouton « plus grand et plus chaud ».\nTERRA : une courbe « hype » équilibrée : "
+                           "grave et aigu relevés, la boue resserrée, le médium adouci. Plus grand, plus clair, plus vivant.\n"
+                           "SUPRA : de l'air et de l'ouverture dans le haut, sans dureté. Pour la brillance et le détail."));
+    view.setTooltip (fr ("FIRST, SECOND, THIRD, FOURTH : écouter la bande seule. Tirer une poignée : le niveau de la bande (molette aussi, "
+                         "double-clic : 0 dB). Tirer un rond : déplacer une séparation. Les traces : la gauche en haut, la droite en bas, telles "
+                         "que CURRENT, DRIFT et LEAN les font vivre. ON / OFF : le traitement de la bande. HYPER MODE : le double du drive."));
+    tape.setTooltip (fr ("TAPE : la saturation de bande magnétique, sur les quatre bandes. Compression progressive, transitoires arrondies, aigus adoucis."));
+    tube.setTooltip (fr ("TUBE : la saturation à lampe, sur les quatre bandes. Harmoniques paires, chaleur, compression douce."));
+    trans.setTooltip (fr ("TRANS : la saturation de transformateur, sur les quatre bandes. Le grave sature d'abord, les attaques passent."));
+    pre.setTooltip (fr ("PRE : les coupes de SURGICAL agissent avant la saturation."));
+    post.setTooltip (fr ("POST : les coupes de SURGICAL agissent après la saturation."));
+    boxyFreq.setTooltip (fr ("BOXY, fréquence : la zone qui sonne carton, fermée (200 - 700 Hz)."));
+    boxyCut.setTooltip (fr ("BOXY, coupe : combien on retire (jusqu'à -12 dB). En haut : rien."));
+    harshCut.setTooltip (fr ("HARSH, coupe : combien on retire (jusqu'à -12 dB). En haut : rien."));
+    harshFreq.setTooltip (fr ("HARSH, fréquence : la zone dure, agressive (2,5 - 4,5 kHz)."));
+    inHp.setTooltip (fr ("Passe-haut d'entrée, avant tout le circuit. Tout à gauche : OFF. La pente se règle dans les réglages."));
+    inLp.setTooltip (fr ("Passe-bas d'entrée, avant tout le circuit. Tout à droite : OFF."));
+    outHp.setTooltip (fr ("Passe-haut de sortie, après tout le circuit. Tout à gauche : OFF."));
+    outLp.setTooltip (fr ("Passe-bas de sortie, après tout le circuit. Tout à droite : OFF."));
+    inGain.setTip (fr ("Gain d'entrée : plus haut, le circuit de saturation travaille plus fort."));
+    outGain.setTip (fr ("Gain de sortie."));
+    link.setTooltip (fr ("GAIN LINK : la sortie compense l'entrée. Montez l'entrée pour saturer plus fort, le volume reste le même : "
+                         "on compare sans être trompé par le plus fort."));
+    linear.setTooltip (fr ("LINEAR PHASE : les quatre bandes deviennent à phase linéaire (la rotation de phase de la séparation est corrigée). "
+                           "Ajoute 100 ms de latence, déclarée au DAW."));
     for (auto& bc : bands)
     {
-        bc->on.setTooltip (fr ("ON : le traitement de la bande (saturation, CURRENT, DRIFT, LEAN). Éteint, la bande passe telle quelle ; son niveau reste."));
-        bc->solo.setTooltip (fr ("S : écouter cette bande seule (plusieurs à la fois possible)."));
-        bc->sat.setTip (fr ("SATURATION : la profondeur du drive de la bande, avec le type choisi en haut. Le niveau moyen est rattrapé."));
-        bc->current.setTip (fr ("CURRENT : la réponse de la bande évolue sans cesse, au hasard et sans cycle, différemment à gauche et à droite : "
-                                "mouvement, largeur, profondeur, sans chorus. La somme mono ne s'annule jamais. Au-delà de 100 % : plus vif, plus expérimental."));
-        bc->drift.setTip (fr ("DRIFT : le centre de la bande glisse vers le haut à gauche et vers le bas à droite : largeur et dimension. La somme mono ne change pas."));
-        bc->lean.setTooltip (fr ("LEAN : la bande penche à gauche (L) ou à droite (R) de 2,5 dB, sans panoramique : la somme mono ne change pas."));
+        bc->drift.setTooltip (fr ("DRIFT : le centre de la bande s'écarte, vers le haut à gauche et vers le bas à droite : séparation et largeur, "
+                                  "sans rien perdre en mono. Seulement sur une sortie stéréo."));
+        bc->lean.setTooltip (fr ("LEAN : OFF, L, R. La bande penche doucement vers la gauche ou la droite, sans sonner panoramiquée : "
+                                 "deux espaces un peu différents. Seulement sur une sortie stéréo."));
+        bc->current.setTip (fr ("CURRENT : la réponse de la bande évolue sans cesse, différemment à gauche et à droite (dérive spectrale "
+                                "stochastique en dual-mono) : mouvement, largeur, profondeur, sans changer le caractère. Sur une piste mono, "
+                                "le mouvement reste sans la stéréo. Au-delà de 100 % : plus vif, plus expérimental."));
+        bc->sat.setTip (fr ("SATURATION : la profondeur du drive de la bande, avec TAPE, TUBE ou TRANS. Le niveau moyen est rattrapé."));
     }
     undoButton.setTooltip (fr ("Annuler le dernier réglage."));
     redoButton.setTooltip (fr ("Rétablir le réglage annulé."));
     helpButton.setTooltip (fr ("? : afficher ou cacher ces explications au survol."));
-    settingsButton.setTooltip (fr ("Réglages : suréchantillonnage du rendu, latences mesurées, remise à zéro des bandes."));
+    settingsButton.setTooltip (fr ("Réglages : suréchantillonnage, pente des filtres, latences mesurées, remise à zéro."));
 }
 
 //==============================================================================
@@ -255,8 +256,7 @@ void VisionEditor::showKnobMenu (KnobMenu& km)
     juce::Component::SafePointer<VisionEditor> safe (this);
     auto* param = &km.param;
     const juce::String kind = km.kind;
-    auto* knob = &km.knob;
-    m.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (knob), [safe, param, kind, knob] (int id)
+    m.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&km.knob), [safe, param, kind] (int id)
     {
         if (safe == nullptr || id == 0) return;
         safe->processor.undo.beginNewTransaction();
@@ -284,21 +284,32 @@ void VisionEditor::showKnobMenu (KnobMenu& km)
                 w->setLookAndFeel (nullptr);
             }), true);
         }
-        juce::ignoreUnused (knob);
     });
 }
 
 void VisionEditor::showSettings()
 {
-    juce::PopupMenu menu, render, lat;
-    const int off = (int) std::lround (ui::plainOf (p (params::osOffline)));
-    for (int o = 0; o < 4; ++o) render.addItem (101 + o, juce::String (1 << o) + "x", true, off == o);
+    juce::PopupMenu menu, osRt, osOff, inSl, outSl, lat;
+    const int rt = (int) std::lround (ui::plainOf (p (params::osRealtime))), off = (int) std::lround (ui::plainOf (p (params::osOffline)));
+    for (int o = 0; o < 4; ++o)
+    {
+        osRt.addItem (101 + o, juce::String (1 << o) + "x", true, rt == o);
+        osOff.addItem (111 + o, juce::String (1 << o) + "x", true, off == o);
+    }
+    const int si = (int) std::lround (ui::plainOf (p (params::inSlope))), so = (int) std::lround (ui::plainOf (p (params::outSlope)));
+    const char* slopes[3] { "12 dB/oct", "24 dB/oct", "48 dB/oct" };
+    for (int sl = 0; sl < 3; ++sl) { inSl.addItem (121 + sl, slopes[sl], true, si == sl); outSl.addItem (131 + sl, slopes[sl], true, so == sl); }
+    const double fs = processor.getSampleRate() > 0 ? processor.getSampleRate() : 48000.0;
+    const double linMs = 1000.0 * vision::linearSeconds;
     for (int o = 0; o < 4; ++o)
         lat.addItem (200 + o, juce::String (1 << o) + "x   " + juce::String (processor.latencyMs (o), 2) + " ms   ("
-                                  + juce::String (processor.latencyMs (o) * (processor.getSampleRate() > 0 ? processor.getSampleRate() : 48000.0) / 1000.0, 0)
-                                  + fr (" échantillons)"), false);
+                                  + juce::String (processor.latencyMs (o) * fs / 1000.0, 0) + fr (" échantillons)   LINEAR PHASE : + ")
+                                  + juce::String (linMs, 0) + " ms", false);
     menu.addSectionHeader ("VISION");
-    menu.addSubMenu (fr ("Suréchantillonnage du rendu hors ligne"), render);
+    menu.addSubMenu (fr ("Suréchantillonnage (lecture)"), osRt);
+    menu.addSubMenu (fr ("Suréchantillonnage (rendu hors ligne)"), osOff);
+    menu.addSubMenu (fr ("Pente des filtres d'entrée"), inSl);
+    menu.addSubMenu (fr ("Pente des filtres de sortie"), outSl);
     menu.addSubMenu (fr ("Latences mesurées"), lat);
     menu.addSeparator();
     menu.addItem (301, fr ("Remettre les quatre bandes à zéro"));
@@ -310,7 +321,10 @@ void VisionEditor::showSettings()
         if (safe == nullptr || id == 0) return;
         safe->processor.undo.beginNewTransaction();
         auto reset = [safe] (const juce::String& pid) { auto& q = safe->p (pid); q.beginChangeGesture(); q.setValueNotifyingHost (q.getDefaultValue()); q.endChangeGesture(); };
-        if (id >= 101 && id <= 104) ui::setPlain (safe->p (params::osOffline), (float) (id - 101));
+        if (id >= 101 && id <= 104) ui::setPlain (safe->p (params::osRealtime), (float) (id - 101));
+        else if (id >= 111 && id <= 114) ui::setPlain (safe->p (params::osOffline), (float) (id - 111));
+        else if (id >= 121 && id <= 123) ui::setPlain (safe->p (params::inSlope), (float) (id - 121));
+        else if (id >= 131 && id <= 133) ui::setPlain (safe->p (params::outSlope), (float) (id - 131));
         else if (id == 301)
             for (int b = 0; b < vision::numBands; ++b)
                 for (const auto& pid : { params::bandOn (b), params::bandSolo (b), params::bandLevel (b), params::bandSat (b),
@@ -326,28 +340,42 @@ void VisionEditor::resized()
     const float s = scale();
     auto place = [s] (juce::Component& c, R r) { c.setBounds (R (r.getX() * s, r.getY() * s, r.getWidth() * s, r.getHeight() * s).toNearestInt()); };
     auto knob = [&] (ui::Knob& k, float cx, float cy, juce::Point<float> sz) { place (k, R (sz.x, sz.y).withCentre ({ cx, cy })); k.setScale (s); };
-    auto seg = [&] (ui::Segments& g, R r) { place (g, r); g.setScale (s); };
-    auto tog = [&] (ui::TextToggle& t, R r) { place (t, r); t.setScale (s); };
 
-    // rangée du haut
-    seg (colorSeg, R (288, 62, 272, 28));
-    seg (typeSeg, R (676, 62, 214, 28));
-    place (hyper, R (902, 62, 124, 28)); hyper.setScale (s);
-    seg (osSeg, R (1072, 62, 154, 28));
-
+    place (colors, R (layout::middle - 155, 60, 310, 26)); colors.setScale (s);
+    place (linear, R (layout::right.getX(), 60, layout::right.getWidth(), 26)); linear.setScale (s);
     place (view, layout::view); view.setScale (s);
+    {
+        std::array<float, 4> cols;
+        for (int b = 0; b < 4; ++b) cols[(size_t) b] = (layout::colCentre[b] - layout::view.getX()) * s;
+        view.setColumns (cols, (layout::middle - layout::view.getX()) * s);
+    }
 
     // bandes
+    const float y0 = layout::bands.getY();
     for (int b = 0; b < vision::numBands; ++b)
     {
         auto& bc = *bands[b];
-        const float x0 = layout::bands.getX() + layout::column * (float) b, y = layout::bands.getY();
-        tog (bc.on, R (x0 + 104, y + 10, 50, 22));
-        tog (bc.solo, R (x0 + 160, y + 10, 30, 22));
-        knob (bc.sat, x0 + 54, y + 100, big);
-        knob (bc.current, x0 + 150, y + 100, big);
-        knob (bc.drift, x0 + 54, y + 226, medium);
-        seg (bc.lean, R (x0 + 104, y + 214, 88, 24));
+        const float cx = layout::colCentre[b];
+        place (bc.drift, R (cx - 58, y0 + 18, 50, 20)); bc.drift.setScale (s);
+        place (bc.lean, R (cx + 8, y0 + 18, 50, 20)); bc.lean.setScale (s);
+        knob (bc.current, cx, y0 + 124, layout::knob);
+        knob (bc.sat, cx, y0 + 274, layout::knob);
+    }
+
+    // milieu : saturation, chirurgie
+    {
+        const float cx = layout::middle;
+        auto sq = [&] (ui::SquareButton& b, float x, float y, float w, float h) { place (b, R (w, h).withCentre ({ x, y })); b.setScale (s); };
+        sq (tape, cx - 80, y0 + 28, 32, 26);
+        sq (tube, cx, y0 + 28, 32, 26);
+        sq (trans, cx + 80, y0 + 28, 32, 26);
+        sq (pre, cx - 66, y0 + 95, 14, 14);
+        sq (post, cx + 66, y0 + 95, 14, 14);
+        auto fader = [&] (ui::VFader& f, float x) { place (f, R (44, 232).withCentre ({ x, y0 + 236 })); f.setScale (s); };
+        fader (boxyFreq, cx - 84);
+        fader (boxyCut, cx - 32);
+        fader (harshCut, cx + 32);
+        fader (harshFreq, cx + 84);
     }
 
     // côtés
@@ -355,28 +383,17 @@ void VisionEditor::resized()
     {
         const auto col = sd == 0 ? layout::left : layout::right;
         const float cx = col.getCentreX(), y = col.getY();
-        place (sd == 0 ? (juce::Component&) inMeter : (juce::Component&) outMeter, R (col.getX() + 34, y + 34, 122, 254));
+        place (sd == 0 ? (juce::Component&) inMeter : (juce::Component&) outMeter, R (col.getX() + 8, y + 28, col.getWidth() - 16, 430));
         (sd == 0 ? inMeter : outMeter).setScale (s);
-        knob (sd == 0 ? inGain : outGain, cx, y + 362, big);
-        if (sd == 0) tog (link, R (cx - 52, y + 428, 104, 24));
-        knob (sd == 0 ? inHp : outHp, cx - 44, y + 540, small);
-        knob (sd == 0 ? inLp : outLp, cx + 44, y + 540, small);
-        seg (sd == 0 ? inSlope : outSlope, R (col.getX() + 26, y + 600, col.getWidth() - 52, 22));
+        auto& hp = sd == 0 ? inHp : outHp;
+        auto& lp = sd == 0 ? inLp : outLp;
+        place (hp, R (col.getX() + 18, y + 470, col.getWidth() - 36, 26)); hp.setScale (s);
+        place (lp, R (col.getX() + 18, y + 502, col.getWidth() - 36, 26)); lp.setScale (s);
+        auto& ro = sd == 0 ? inReadout : outReadout;
+        place (ro, R (96, 24).withCentre ({ cx, y + 560 })); ro.setScale (s);
+        knob (sd == 0 ? inGain : outGain, cx, y + 650, layout::gainKnob);
     }
-
-    // chirurgie
-    {
-        const float y = layout::surgical.getY(), x = layout::surgical.getX();
-        tog (boxyOn, R (x + 104, y + 32, 74, 24));
-        knob (boxyFreq, x + 230, y + 44, tiny);
-        knob (boxyDepth, x + 290, y + 44, tiny);
-        knob (boxyQ, x + 350, y + 44, tiny);
-        seg (position, R (x + 388, y + 32, 96, 24));
-        tog (harshOn, R (x + 504, y + 32, 74, 24));
-        knob (harshFreq, x + 630, y + 44, tiny);
-        knob (harshDepth, x + 690, y + 44, tiny);
-        knob (harshQ, x + 750, y + 44, tiny);
-    }
+    place (link, R (26, 20).withCentre ({ (layout::left.getRight() + layout::view.getX()) * 0.5f, layout::left.getY() + 650 })); link.setScale (s);
 
     // la barre du haut et la pastille de licence
 #if VISION_LICENCE
@@ -387,15 +404,16 @@ void VisionEditor::resized()
     bar.setPillWidth (pillW);
     bar.place (s, getLocalBounds());
     {
-        // annuler, rétablir, aide, réglages : à gauche de la pastille de licence
+        // aide, réglages, annuler, rétablir : à gauche de la pastille de licence
         const auto pill = bar.getPillArea().toFloat();
         float right = (pillW > 0 ? pill.getX() : pill.getRight()) - 10;
         const float cy = pill.getHeight() > 0 ? pill.getCentreY() : 25;
-        auto put = [&] (ui::IconButton& c, float w) { c.setBounds (R (right - w, cy - 15 * s, w, 30 * s).toNearestInt()); c.setScale (s); right -= w + 6 * s; };
-        put (settingsButton, 30 * s);
-        put (helpButton, 30 * s);
-        put (redoButton, 30 * s);
-        put (undoButton, 30 * s);
+        // (la zone de la pastille est en points de base, comme toute la barre)
+        auto put = [&] (juce::Component& c, float w) { place (c, R (right - w, cy - 15, w, 30)); c.toFront (false); right -= w + 6; };
+        put (redoButton, 30); redoButton.setScale (s);
+        put (undoButton, 30); undoButton.setScale (s);
+        put (settingsButton, 30); settingsButton.setScale (s);
+        put (helpButton, 30); helpButton.setScale (s);
     }
 #if VISION_LICENCE
     if (licenseOverlay != nullptr)
@@ -419,45 +437,52 @@ void VisionEditor::renderBackground()
     g.addTransform (juce::AffineTransform::scale (scale() * k));
     using namespace ui;
 
-    for (const auto& r : { layout::left, layout::right, layout::view, layout::bands, layout::surgical })
+    for (const auto& r : { layout::left, layout::right, layout::bands })
         onirique::da::glass (g, r, 14.0f, 1.0f);
+    // la fenêtre animée : un puits plus sombre
+    {
+        const auto r = layout::view;
+        onirique::da::glass (g, r, 14.0f, 1.0f);
+        g.setColour (juce::Colour (0xd0070506));
+        g.fillRoundedRectangle (r.reduced (6.0f), 10.0f);
+    }
 
-    const auto title = font (Face::display, 11.5f, 0.16f), small = font (Face::body, 8.5f, 0.2f);
-    // rangée du haut
-    text (g, "COLOR", R (214, 62, 70, 28), title, bone, juce::Justification::centredLeft);
-    text (g, "SATURATION", R (580, 62, 92, 28), title, bone, juce::Justification::centredRight);
-    text (g, "OS", R (1036, 62, 32, 28), title, bone, juce::Justification::centredLeft);
-
+    const auto lab = font (Face::display, 8.5f, 0.18f);
     // côtés
     for (int sd = 0; sd < 2; ++sd)
     {
         const auto col = sd == 0 ? layout::left : layout::right;
-        text (g, sd == 0 ? "IN" : "OUT", R (col.getX(), col.getY() + 8, col.getWidth(), 20), font (Face::display, 14.0f, 0.18f), bone);
-        text (g, sd == 0 ? "INPUT FILTER" : "OUTPUT FILTER", R (col.getX(), col.getY() + 470, col.getWidth(), 16), title, haze);
-        text (g, "dB/oct", R (col.getX(), col.getY() + 624, col.getWidth(), 14), small, dim);
-        g.setColour (juce::Colours::white.withAlpha (0.05f));
-        g.fillRect (col.getX() + 20, col.getY() + 462, col.getWidth() - 40, 1.0f);
+        text (g, sd == 0 ? "IN" : "OUT", R (col.getX(), col.getY() + 6, col.getWidth(), 20), font (Face::display, 13.0f, 0.2f), bone);
     }
-
-    // bandes : nom, séparations, légendes
+    // bandes : DRIFT, LEAN sous leurs boutons ; séparations des colonnes
+    const float y0 = layout::bands.getY();
     for (int b = 0; b < vision::numBands; ++b)
     {
-        const float x0 = layout::bands.getX() + layout::column * (float) b, y = layout::bands.getY();
-        text (g, params::bandNames[b], R (x0 + 16, y + 10, 90, 22), font (Face::display, 12.0f, 0.18f), bone, juce::Justification::centredLeft);
-        text (g, "LEAN", R (x0 + 104, y + 178, 88, 16), font (Face::body, 10.5f, 0.16f), haze);
-        if (b > 0)
-        {
-            g.setColour (juce::Colours::white.withAlpha (0.06f));
-            g.fillRect (x0, y + 16, 1.0f, layout::bands.getHeight() - 32);
-        }
+        const float cx = layout::colCentre[b];
+        text (g, "DRIFT", R (cx - 70, y0 + 40, 74, 14), lab, haze);
+        text (g, "LEAN", R (cx - 4, y0 + 40, 74, 14), lab, haze);
     }
-
-    // chirurgie
+    g.setColour (juce::Colours::white.withAlpha (0.06f));
+    for (float x : { 364.0f, 514.0f, 786.0f, 936.0f })
+        g.fillRect (x, y0 + 16, 1.0f, layout::bands.getHeight() - 32);
+    // milieu
     {
-        const float y = layout::surgical.getY(), x = layout::surgical.getX();
-        text (g, "SURGICAL", R (x + 16, y + 32, 86, 24), title, bone, juce::Justification::centredLeft);
-        g.setColour (juce::Colours::white.withAlpha (0.05f));
-        g.fillRect (x + 492, y + 14, 1.0f, layout::surgical.getHeight() - 28);
+        const float cx = layout::middle;
+        text (g, "TAPE", R (cx - 110, y0 + 44, 60, 14), lab, haze);
+        text (g, "TUBE", R (cx - 30, y0 + 44, 60, 14), lab, haze);
+        text (g, "TRANS", R (cx + 50, y0 + 44, 60, 14), lab, haze);
+        g.setColour (juce::Colours::white.withAlpha (0.07f));
+        g.fillRect (cx - 110, y0 + 70, 220.0f, 1.0f);
+        text (g, "PRE", R (cx - 112, y0 + 88, 36, 14), lab, haze, juce::Justification::centredLeft);
+        text (g, "SURGICAL", R (cx - 50, y0 + 88, 100, 14), font (Face::display, 9.0f, 0.2f), bone);
+        text (g, "POST", R (cx + 76, y0 + 88, 40, 14), lab, haze, juce::Justification::centredRight);
+        const auto small = font (Face::display, 8.0f, 0.16f);
+        text (g, "FREQ", R (cx - 106, y0 + 354, 44, 12), small, haze);
+        text (g, "CUT", R (cx - 54, y0 + 354, 44, 12), small, haze);
+        text (g, "CUT", R (cx + 10, y0 + 354, 44, 12), small, haze);
+        text (g, "FREQ", R (cx + 62, y0 + 354, 44, 12), small, haze);
+        text (g, "BOXY", R (cx - 106, y0 + 112, 96, 10), font (Face::body, 7.5f, 0.2f), dim);
+        text (g, "HARSH", R (cx + 10, y0 + 112, 96, 10), font (Face::body, 7.5f, 0.2f), dim);
     }
 }
 
