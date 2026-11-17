@@ -494,7 +494,7 @@ struct Band
 
 //==============================================================================
 /** COLOR : trois couleurs de boîtier, chacune une égalisation de caractère ET un comportement (harmoniques du grave
-    pour INFRA, colle et creux de la boue qui suit le signal pour TERRA, air qui recule quand le haut-médium durcit pour
+    pour INFRA, colle et creux du mud qui suit le signal pour TERRA, air qui recule quand la harshness monte pour
     SUPRA). Les couleurs se fondent l'une dans l'autre en 40 ms. */
 struct Color
 {
@@ -585,7 +585,7 @@ struct Color
         {
             double r = 0.0;
             for (int c = 0; c < channels; ++c) r = std::max (r, sEnvB[c] / std::max (sEnvF[c], 1.0e-9));
-            // le haut-médium dur (2,5–4,5 kHz) qui dépasse sa part est retenu, jusqu'à -3,5 dB, pour que l'air reste doux
+            // la harshness du haut-médium (2,5–4,5 kHz) qui dépasse sa part est retenu, jusqu'à -3,5 dB, pour que l'air reste doux
             const double target = -std::min (3.5, std::max (0.0, (r - 0.22) * 14.0));
             sDyn += (target < sDyn ? 0.35 : 0.08) * (target - sDyn);
             for (int c = 0; c < channels; ++c) sHarsh[c].set (Svf::bell, 3200.0, 1.4, sDyn, fs);
@@ -643,7 +643,7 @@ struct Color
 };
 
 //==============================================================================
-/** SURGICAL : deux cloches de coupe, BOXY (le carton, 200–700 Hz) et HARSH (la dureté, 2,5–4,5 kHz), chacune une
+/** SURGICAL : deux cloches de coupe, BOXY (la zone boxy, 200–700 Hz) et HARSH (la harshness, 2,5–4,5 kHz), chacune une
     fréquence et une coupe (0 = rien). PRE ou POST : avant ou après la saturation. Changer de place se fait sans clic :
     les coupes s'effacent, changent de place, reviennent. Sans coupe, rien n'est calculé (transparence au bit près). */
 struct Surgical

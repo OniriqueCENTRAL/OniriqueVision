@@ -198,9 +198,9 @@ void VisionEditor::timerCallback()
 void VisionEditor::updateTips()
 {
     colors.setTooltip (fr ("La couleur du boîtier, sous le capot (un second clic l'éteint).\nINFRA : du poids dans le grave, un médium présent, "
-                           "l'ensemble assombri, la boue tenue. Un bouton « plus grand et plus chaud ».\nTERRA : une courbe « hype » équilibrée : "
-                           "grave et aigu relevés, la boue resserrée, le médium adouci. Plus grand, plus clair, plus vivant.\n"
-                           "SUPRA : de l'air et de l'ouverture dans le haut, sans dureté. Pour la brillance et le détail."));
+                           "l'ensemble assombri, le mud tenu. Un bouton « plus grand et plus chaud ».\nTERRA : une courbe « hype » équilibrée : "
+                           "grave et aigu relevés, le mud resserré, le médium adouci. Plus grand, plus clair, plus vivant.\n"
+                           "SUPRA : de l'air et de l'ouverture dans le haut, sans harshness. Pour la brillance et le détail."));
     view.setTooltip (fr ("FIRST, SECOND, THIRD, FOURTH : écouter la bande seule. Tirer une poignée : le niveau de la bande (molette aussi, "
                          "double-clic : 0 dB). Tirer un rond : déplacer une séparation. Les traces : la gauche en haut, la droite en bas, telles "
                          "que CURRENT, DRIFT et LEAN les font vivre. ON / OFF : le traitement de la bande. HYPER MODE : le double du drive."));
@@ -209,10 +209,10 @@ void VisionEditor::updateTips()
     trans.setTooltip (fr ("TRANS : la saturation de transformateur, sur les quatre bandes. Le grave sature d'abord, les attaques passent."));
     pre.setTooltip (fr ("PRE : les coupes de SURGICAL agissent avant la saturation."));
     post.setTooltip (fr ("POST : les coupes de SURGICAL agissent après la saturation."));
-    boxyFreq.setTooltip (fr ("BOXY, fréquence : la zone qui sonne carton, fermée (200 - 700 Hz)."));
+    boxyFreq.setTooltip (fr ("BOXY, fréquence : la zone boxy, qui sonne fermée (200 - 700 Hz)."));
     boxyCut.setTooltip (fr ("BOXY, coupe : combien on retire (jusqu'à -12 dB). En haut : rien."));
     harshCut.setTooltip (fr ("HARSH, coupe : combien on retire (jusqu'à -12 dB). En haut : rien."));
-    harshFreq.setTooltip (fr ("HARSH, fréquence : la zone dure, agressive (2,5 - 4,5 kHz)."));
+    harshFreq.setTooltip (fr ("HARSH, fréquence : la zone de harshness, agressive (2,5 - 4,5 kHz)."));
     inHp.setTooltip (fr ("Passe-haut d'entrée, avant tout le circuit. Tout à gauche : OFF. La pente se règle dans les réglages."));
     inLp.setTooltip (fr ("Passe-bas d'entrée, avant tout le circuit. Tout à droite : OFF."));
     outHp.setTooltip (fr ("Passe-haut de sortie, après tout le circuit. Tout à gauche : OFF."));

@@ -77,12 +77,12 @@ est inchangée). DRIFT et LEAN n'agissent que sur une sortie stéréo ; en mono 
 
 Trois boîtiers, chacun une égalisation de caractère et un comportement ; ils se fondent l'un dans l'autre en 40 ms.
 
-- **INFRA** : plateau grave +2,2 dB à 95 Hz, boue -1 dB à 300 Hz, présence +0,8 dB à 1,3 kHz, plateau aigu -1,6 dB à
+- **INFRA** : plateau grave +2,2 dB à 95 Hz, mud -1 dB à 300 Hz, présence +0,8 dB à 1,3 kHz, plateau aigu -1,6 dB à
   7 kHz, et quelques harmoniques paires du grave seul (étage à lampe léger sous 140 Hz).
-- **TERRA** : plateau grave +1,6 dB, aigu +1,6 dB, douceur +1 dB à 2,3 kHz, boue -1 dB à 380 Hz creusée jusqu'à 2 dB de
+- **TERRA** : plateau grave +1,6 dB, aigu +1,6 dB, douceur +1 dB à 2,3 kHz, mud -1 dB à 380 Hz creusée jusqu'à 2 dB de
   plus quand elle dépasse sa part (dynamique), et une courbe magnétique à peine poussée (colle).
-- **SUPRA** : air +2,8 dB à 11,5 kHz, présence +0,8 dB à 5,5 kHz, grave allégé, et le haut-médium dur (2,5 - 4,5 kHz)
-  retenu jusqu'à -3,5 dB quand il dépasse sa part : l'air sans la dureté.
+- **SUPRA** : air +2,8 dB à 11,5 kHz, présence +0,8 dB à 5,5 kHz, grave allégé, et la harshness du haut-médium (2,5 - 4,5 kHz)
+  retenu jusqu'à -3,5 dB quand il dépasse sa part : l'air sans la harshness.
 - **OFF** : transparent au bit près.
 
 ## SURGICAL, filtres, niveaux
