@@ -42,6 +42,7 @@ VisionEditor::VisionEditor (VisionProcessor& proc)
       inHp (p (params::inHp), "HP"), inLp (p (params::inLp), "LP"), outHp (p (params::outHp), "HP"), outLp (p (params::outLp), "LP"),
       inReadout (p (params::inGain)), outReadout (p (params::outGain)),
       inGain (p (params::inGain), "GAIN", knobLook, true), outGain (p (params::outGain), "GAIN", knobLook, true),
+      dryWet (p (params::mix), "DRY / WET", knobLook),
       link (p (params::gainLink)),
       linear (p (params::linear), "LINEAR PHASE"),
       undoButton (ui::IconButton::undo, fr ("Annuler")), redoButton (ui::IconButton::redo, fr ("Rétablir")),
@@ -63,10 +64,11 @@ VisionEditor::VisionEditor (VisionProcessor& proc)
     }
     inGain.setBelow (true);
     outGain.setBelow (true);
+    dryWet.setBelow (true);
 
     for (juce::Component* c : std::initializer_list<juce::Component*> {
              &colors, &view, &tape, &tube, &trans, &pre, &post, &boxyFreq, &boxyCut, &harshCut, &harshFreq,
-             &inMeter, &outMeter, &inHp, &inLp, &outHp, &outLp, &inReadout, &outReadout, &inGain, &outGain, &link,
+             &inMeter, &outMeter, &inHp, &inLp, &outHp, &outLp, &inReadout, &outReadout, &inGain, &outGain, &dryWet, &link,
              &linear, &undoButton, &redoButton, &helpButton, &settingsButton })
         addAndMakeVisible (c);
     for (int b = 0; b < vision::numBands; ++b)
@@ -80,6 +82,7 @@ VisionEditor::VisionEditor (VisionProcessor& proc)
     }
     addKnobMenu (inGain, params::inGain);
     addKnobMenu (outGain, params::outGain);
+    addKnobMenu (dryWet, params::mix);
 
     undoButton.onClick = [this] { processor.undo.undo(); };
     redoButton.onClick = [this] { processor.undo.redo(); };
@@ -219,6 +222,7 @@ void VisionEditor::updateTips()
     outLp.setTooltip (fr ("Passe-bas de sortie, après tout le circuit. Tout à droite : OFF."));
     inGain.setTip (fr ("Gain d'entrée : plus haut, le circuit de saturation travaille plus fort."));
     outGain.setTip (fr ("Gain de sortie."));
+    dryWet.setTip (fr ("DRY / WET : le son d'origine mêlé au son traité. Le son d'origine reste en phase avec le traitement : doser à mi-chemin ne creuse rien."));
     link.setTooltip (fr ("GAIN LINK : la sortie compense l'entrée. Montez l'entrée pour saturer plus fort, le volume reste le même : "
                          "on compare sans être trompé par le plus fort."));
     linear.setTooltip (fr ("LINEAR PHASE : les quatre bandes deviennent à phase linéaire (la rotation de phase de la séparation est corrigée). "
@@ -383,17 +387,19 @@ void VisionEditor::resized()
     {
         const auto col = sd == 0 ? layout::left : layout::right;
         const float cx = col.getCentreX(), y = col.getY();
-        place (sd == 0 ? (juce::Component&) inMeter : (juce::Component&) outMeter, R (col.getX() + 8, y + 28, col.getWidth() - 16, 430));
+        place (sd == 0 ? (juce::Component&) inMeter : (juce::Component&) outMeter, R (col.getX() + 8, y + 28, col.getWidth() - 16, 396));
         (sd == 0 ? inMeter : outMeter).setScale (s);
         auto& hp = sd == 0 ? inHp : outHp;
         auto& lp = sd == 0 ? inLp : outLp;
-        place (hp, R (col.getX() + 18, y + 470, col.getWidth() - 36, 26)); hp.setScale (s);
-        place (lp, R (col.getX() + 18, y + 502, col.getWidth() - 36, 26)); lp.setScale (s);
+        place (hp, R (col.getX() + 18, y + 434, col.getWidth() - 36, 26)); hp.setScale (s);
+        place (lp, R (col.getX() + 18, y + 464, col.getWidth() - 36, 26)); lp.setScale (s);
         auto& ro = sd == 0 ? inReadout : outReadout;
-        place (ro, R (96, 24).withCentre ({ cx, y + 560 })); ro.setScale (s);
-        knob (sd == 0 ? inGain : outGain, cx, y + 650, layout::gainKnob);
+        place (ro, R (96, 24).withCentre ({ cx, y + 512 })); ro.setScale (s);
+        knob (sd == 0 ? inGain : outGain, cx, y + 590, layout::gainKnob);
     }
-    place (link, R (26, 20).withCentre ({ (layout::left.getRight() + layout::view.getX()) * 0.5f, layout::left.getY() + 650 })); link.setScale (s);
+    // DRY / WET : en bas à droite, sous le gain de sortie
+    knob (dryWet, layout::right.getCentreX(), layout::right.getY() + 712, juce::Point<float> (86, 106));
+    place (link, R (26, 20).withCentre ({ (layout::left.getRight() + layout::view.getX()) * 0.5f, layout::left.getY() + 590 })); link.setScale (s);
 
     // la barre du haut et la pastille de licence
 #if VISION_LICENCE

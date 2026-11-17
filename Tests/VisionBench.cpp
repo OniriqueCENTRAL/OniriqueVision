@@ -209,6 +209,42 @@ static void testLinearPhase()
     }
 }
 
+static void testDryWet()
+{
+    std::printf ("\n[DRY / WET]\n");
+    const double fs = 48000.0;
+    auto through = [&] (const EngineParams& p)
+    {
+        Engine e; e.prepare (fs, 512, p, 2);
+        auto in = noise (48000, 33, 0.5);
+        juce::AudioBuffer<float> b (2, 48000);
+        for (int i = 0; i < 48000; ++i) { b.setSample (0, i, in[(size_t) i]); b.setSample (1, i, in[(size_t) i]); }
+        run (e, b, p);
+        return b;
+    };
+    auto nullDb = [] (const juce::AudioBuffer<float>& a, const juce::AudioBuffer<float>& b)
+    {
+        double err = 0, sig = 0;
+        for (int c = 0; c < 2; ++c)
+            for (int i = 4000; i < a.getNumSamples(); ++i) { const double d = a.getSample (c, i) - b.getSample (c, i); err += d * d; sig += (double) b.getSample (c, i) * b.getSample (c, i); }
+        return 10.0 * std::log10 (err / sig + 1.0e-30);
+    };
+    const auto ref = through (neutral());
+    {
+        auto p = neutral(); p.mix = 0.0; p.color = 2; p.hyper = true; p.boxyCut = -6.0;
+        for (auto& b : p.band) { b.sat = 1.0; b.current = 2.0; b.drift = true; b.lean = 1; }
+        const double d = nullDb (through (p), ref);
+        std::printf ("  DRY / WET à 0 %%, tout poussé, contre le moteur neutre : %.1f dB\n", d);
+        check (d < -100.0, "DRY / WET à 0 % : le son d'origine exact (aligné, même phase)");
+    }
+    {
+        auto p = neutral(); p.mix = 0.5;
+        const double d = nullDb (through (p), ref);
+        std::printf ("  DRY / WET à 50 %%, réglages neutres : %.1f dB\n", d);
+        check (d < -100.0, "DRY / WET à 50 % : aucun peigne (le dry est en phase avec le traitement)");
+    }
+}
+
 static void testSaturation()
 {
     std::printf ("\n[saturations] signatures harmoniques (sinus -12 dBFS, saturation 60 %%, bande seule)\n");
@@ -534,6 +570,7 @@ int main()
     testCrossover();
     testNeutralAndBypass();
     testLinearPhase();
+    testDryWet();
     testSaturation();
     testCurrentDriftLean();
     testColorsAndSurgical();

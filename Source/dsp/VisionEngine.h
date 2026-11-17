@@ -52,6 +52,7 @@ struct EngineParams
     double boxyFreq = 400.0, boxyCut = 0.0, harshFreq = 3500.0, harshCut = 0.0;   // coupes en dB (0 = rien)
     int os = 1;                              // 0 = 1x, 1 = 2x, 2 = 4x, 3 = 8x
     bool bypass = false;
+    double mix = 1.0;                        // DRY / WET : 0 = le son d'origine, 1 = tout le traitement
 };
 
 inline bool hpOff (double f) { return f <= 10.5; }
@@ -717,6 +718,10 @@ struct Core
     Color color;
     Surgical surgical;
     Smooth logX[3];
+    // DRY / WET : le son d'origine passe par le même passe-tout que la séparation (AP(f1)·AP(f2)·AP(f3)) : il reste en
+    // phase avec le traitement, et doser à mi-chemin ne creuse rien
+    Svf apDry[2][3];
+    Smooth mix;
     int counter = 0;
     Convolver* linear = nullptr;                  // non nul : LINEAR PHASE en service
 
@@ -725,6 +730,7 @@ struct Core
         fs = rate; linear = conv;
         const double ctl = rate / controlStep;
         for (int i = 0; i < 3; ++i) logX[i].setTime (0.05, ctl);
+        mix.setTime (0.03, rate);
         for (int b = 0; b < numBands; ++b) bands[b].prepare (rate, b, 0xC0FFEEull + 7919ull * (uint64_t) (b + 1));
         color.prepare (rate);
         surgical.prepare (rate);
@@ -737,6 +743,8 @@ struct Core
         orderCrossovers (x);
         for (int i = 0; i < 3; ++i) logX[i].snap (std::log (x[i]));
         for (auto& c : xo) { c.reset(); c.set (x, fs); }
+        for (auto& ch : apDry) for (auto& a : ch) a.reset();
+        mix.snap (std::clamp (p.mix, 0.0, 1.0));
         bool anySolo = false; for (auto& b : p.band) anySolo |= b.solo;
         for (int b = 0; b < numBands; ++b) { bands[b].reset(); bands[b].snap (p.band[b], p.satType, p.hyper, anySolo); }
         color.reset(); color.snap (p.color);
@@ -750,6 +758,7 @@ struct Core
         double x[3] { p.xover[0], p.xover[1], p.xover[2] };
         orderCrossovers (x);
         for (int i = 0; i < 3; ++i) logX[i].target = std::log (x[i]);
+        mix.target = std::clamp (p.mix, 0.0, 1.0);
         bool anySolo = false; for (auto& b : p.band) anySolo |= b.solo;
         for (int b = 0; b < numBands; ++b) bands[b].setTargets (p.band[b], p.satType, p.hyper, anySolo);
         color.setTarget (p.color);
@@ -761,6 +770,8 @@ struct Core
         double x[3];
         for (int i = 0; i < 3; ++i) x[i] = std::exp (logX[i].next());
         for (auto& c : xo) c.set (x, fs);
+        for (auto& ch : apDry)
+            for (int i = 0; i < 3; ++i) ch[i].set (Svf::allpass, x[i], 0.70710678, 0.0, fs);
         for (int b = 0; b < numBands; ++b)
         {
             double lo, hi; bandEdges (x, b, lo, hi);
@@ -784,6 +795,8 @@ struct Core
             counter = (counter + 1) % controlStep;
 
             double io[2] { (double) l[i], channels == 2 ? (double) r[i] : 0.0 };
+            double dry[2] { 0.0, 0.0 };
+            for (int c = 0; c < channels; ++c) dry[c] = apDry[c][2].process (apDry[c][1].process (apDry[c][0].process (io[c])));
             if (! surgical.post) surgical.process (io, channels);
 
             double split[2][numBands];
@@ -797,6 +810,9 @@ struct Core
             }
             if (surgical.post) surgical.process (sum, channels);
             color.process (sum, channels);
+            const double mx = mix.next();
+            if (mx < 1.0 - 1.0e-9)
+                for (int c = 0; c < channels; ++c) sum[c] = dry[c] + mx * (sum[c] - dry[c]);
 
             l[i] = (float) sum[0];
             if (channels == 2) r[i] = (float) sum[1];

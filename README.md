@@ -2,7 +2,7 @@
 
 Saturation multibande et dimension stéréo, disposée comme LACUNA. Quatre bandes (FIRST, SECOND, THIRD, FOURTH), trois saturations (TAPE, TUBE,
 TRANS), mouvement spectral CURRENT, décalage DRIFT, orientation LEAN, couleurs INFRA / TERRA / SUPRA, HYPER MODE,
-filtres BOXY et HARSH, filtres d'entrée et de sortie, GAIN LINK, LINEAR PHASE, comparaison A / B / C. VST3 sur Windows, VST3 et
+filtres BOXY et HARSH, filtres d'entrée et de sortie, GAIN LINK, DRY / WET, LINEAR PHASE, comparaison A / B / C. VST3 sur Windows, VST3 et
 Audio Unit sur Mac.
 
 Inspiré des fonctions de LACUNA (Sabol Hill) ; aucun code, algorithme propriétaire ni visuel n'en est repris :

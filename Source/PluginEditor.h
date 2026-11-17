@@ -17,7 +17,7 @@
 //                    ON / OFF de chaque bande, HYPER MODE
 //    bandes          DRIFT et LEAN, CURRENT, SATURATION (FIRST et SECOND à gauche, THIRD et FOURTH à droite)
 //    milieu          TAPE / TUBE / TRANS, PRE · SURGICAL · POST, faders FREQ CUT (BOXY) et CUT FREQ (HARSH)
-//    côtés           IN et OUT : VU-mètre, filtres HP / LP, gain (boîte et potard), GAIN LINK
+//    côtés           IN et OUT : VU-mètre, filtres HP / LP, gain (boîte et potard), GAIN LINK ; DRY / WET sous OUT
 //==============================================================================
 class VisionEditor : public juce::AudioProcessorEditor, private juce::Timer
 {
@@ -80,7 +80,7 @@ private:
     ui::Meter inMeter, outMeter;
     ui::HSlider inHp, inLp, outHp, outLp;
     ui::Readout inReadout, outReadout;
-    ui::Knob inGain, outGain;
+    ui::Knob inGain, outGain, dryWet;
     ui::LinkButton link;
     // haut
     ui::TextToggle linear;

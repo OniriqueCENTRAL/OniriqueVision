@@ -14,7 +14,8 @@ inline const juce::String inGain = "inGain", outGain = "outGain", gainLink = "ga
                           color = "color", satType = "satType", hyper = "hyper", linear = "linear",
                           x1 = "x1", x2 = "x2", x3 = "x3",
                           boxyFreq = "boxyFreq", boxyCut = "boxyCut", harshFreq = "harshFreq", harshCut = "harshCut",
-                          surgicalPost = "surgicalPost", osRealtime = "osRealtime", osOffline = "osOffline", bypass = "bypass";
+                          surgicalPost = "surgicalPost", osRealtime = "osRealtime", osOffline = "osOffline", bypass = "bypass",
+                          mix = "mix";
 
 inline const char* bandNames[vision::numBands] { "FIRST", "SECOND", "THIRD", "FOURTH" };
 
@@ -110,6 +111,7 @@ inline juce::AudioProcessorValueTreeState::ParameterLayout layout()
     db (inGain, "Input", -24.0f, 24.0f, 0.0f);
     db (outGain, "Output", -24.0f, 24.0f, 0.0f);
     toggle (gainLink, "Gain Link", false);
+    pct (mix, "Dry/Wet", 100.0f, 100.0f);
     // filtres d'entrée et de sortie
     const StringArray slopes { "12 dB/oct", "24 dB/oct", "48 dB/oct" };
     freq (inHp, "Input High Pass", 10.0f, 1000.0f, 10.0f, -1);
@@ -162,7 +164,7 @@ struct Reader
         for (const auto* id : { &inGain, &outGain, &gainLink, &inHp, &inLp, &inSlope, &outHp, &outLp, &outSlope,
                                 &color, &satType, &hyper, &linear, &x1, &x2, &x3,
                                 &boxyFreq, &boxyCut, &harshFreq, &harshCut,
-                                &surgicalPost, &osRealtime, &osOffline, &bypass })
+                                &surgicalPost, &osRealtime, &osOffline, &bypass, &mix })
             add (*id);
         for (int b = 0; b < vision::numBands; ++b)
             for (const auto& id : { bandOn (b), bandSolo (b), bandLevel (b), bandSat (b), bandCurrent (b), bandDrift (b), bandLean (b) })
@@ -186,6 +188,7 @@ struct Reader
         const int rt = c(), off = c();
         p.os = offline ? off : rt;
         p.bypass = b();
+        p.mix = f() / 100.0;
         for (auto& bp : p.band)
         {
             bp.on = b(); bp.solo = b(); bp.levelDb = f();

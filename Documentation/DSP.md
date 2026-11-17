@@ -102,6 +102,12 @@ fractionnaire : il est complété jusqu'à l'échantillon entier dans le domaine
 le nouveau chemin se remplit, puis un fondu de 40 ms. BYPASS : rampe linéaire de 30 ms vers le signal d'origine retardé
 de la latence (au bit près à son terme).
 
+## DRY / WET
+
+Le son d'origine passe par le même passe-tout que la séparation (AP(f1)·AP(f2)·AP(f3)), après la correction de LINEAR
+PHASE s'il y en a une : il reste en phase avec le traitement. Mesures : à 0 %, tout poussé, le son d'origine à -155 dB
+près ; à 50 % en réglages neutres, aucun peigne (-158 dB).
+
 ## LINEAR PHASE
 
 Une bande Linkwitz-Riley d'ordre 4 a exactement la phase du passe-tout de sa séparation (LP4 = AP · |LP4|,
