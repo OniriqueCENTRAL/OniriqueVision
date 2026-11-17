@@ -20,7 +20,7 @@ jobs:
       - name: Compiler (universel arm64 + x86_64)
         run: |
           cmake -B build -G Xcode -DVISION_TESTS=OFF
-          cmake --build build --config Release --target OniriqueHalo_VST3 OniriqueHalo_AU -- -quiet
+          cmake --build build --config Release --target OniriqueVision_VST3 OniriqueVision_AU -- -quiet
       - name: Signer (ad hoc) et empaqueter
         run: |
           OUT="build/${TARGET}_artefacts/Release"
