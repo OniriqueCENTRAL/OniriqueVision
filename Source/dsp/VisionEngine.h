@@ -576,7 +576,7 @@ struct Color
         {
             double r = 0.0;
             for (int c = 0; c < channels; ++c) r = std::max (r, tEnvB[c] / std::max (tEnvF[c], 1.0e-9));
-            // la boue (300–500 Hz) qui dépasse sa part habituelle est creusée un peu plus, jusqu'à -2 dB de plus
+            // le mud (300–500 Hz) qui dépasse sa part habituelle est creusée un peu plus, jusqu'à -2 dB de plus
             const double target = -std::min (2.0, std::max (0.0, (r - 0.30) * 9.0));
             tDyn += 0.15 * (target - tDyn);
             for (int c = 0; c < channels; ++c) tMud[c].set (Svf::bell, 380.0, 1.1, -1.0 + tDyn, fs);
