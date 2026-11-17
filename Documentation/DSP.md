@@ -53,7 +53,8 @@ La réponse de chaque bande devient une courbe vivante le long des fréquences, 
 - Aucun passe-tout, aucun retard : la somme mono ne se creuse pas en peigne. En mono, le canal garde son mouvement.
 - Mesures (bruit rose mono dans une piste stéréo, tiers d'octave) : somme mono à ±0,8 dB à 100 %, ±2 dB à 200 % ;
   corrélation 0,997 (100 %) et 0,986 (200 %).
-- La fenêtre animée dessine ces cloches telles que le moteur les publie, canal par canal (14 points par dB), plus
+- La fenêtre animée dessine ces cloches telles que le moteur les publie, canal par canal (14 points par dB), avec un
+  grésillement « électrique » proportionnel à CURRENT (nul sans CURRENT, propre à chaque canal), plus
   l'écart gauche / droite qui grandit avec CURRENT et DRIFT.
 
 ## Compatibilité mono de DRIFT et LEAN, par construction

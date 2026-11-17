@@ -548,17 +548,20 @@ public:
 
         // les traces
         const float cy = plot.getCentreY();
-        const int nPts = std::max (80, (int) (plot.getWidth() / (2.5f * u)));
+        const int nPts = std::min (crackPoints - 1, std::max (80, (int) (plot.getWidth() / (2.5f * u))));
         juce::Path tr[2];
         for (int i = 0; i <= nPts; ++i)
         {
             const float px = plot.getX() + 18 * u + (plot.getWidth() - 36 * u) * (float) i / (float) nPts;
             const double f = freqOf (px);
             double y[2];
-            traces (f, x, anySolo, y);
+            double amp = 0.0;
+            traces (f, x, anySolo, y, amp);
             for (int c = 0; c < 2; ++c)
             {
-                const float py = juce::jlimit (plot.getY() + 4 * u, plot.getBottom() - 4 * u, cy + (float) y[c] * u);
+                // le grésillement électrique, par-dessus la vraie courbe : proportionnel à CURRENT, propre à chaque canal
+                const float py = juce::jlimit (plot.getY() + 4 * u, plot.getBottom() - 4 * u,
+                                               cy + (float) (y[c] + amp * crack[c][(size_t) i]) * u);
                 if (i == 0) tr[c].startNewSubPath (px, py); else tr[c].lineTo (px, py);
             }
         }
@@ -686,7 +689,23 @@ public:
 private:
     using R = juce::Rectangle<float>;
 
-    void timerCallback() override { repaint(); }
+    void timerCallback() override
+    {
+        // le grésillement : à chaque image, de nouveaux écarts au hasard, mêlés aux précédents puis adoucis entre voisins
+        // (un arc qui crépite, pas un bruit blanc)
+        for (auto& line : crack)
+        {
+            for (auto& v : line) v = 0.45f * v + 0.55f * (rng.nextFloat() * 2.0f - 1.0f);
+            float prev = line[0];
+            for (size_t k = 1; k + 1 < line.size(); ++k)
+            {
+                const float cur = line[k];
+                line[k] = 0.25f * prev + 0.5f * cur + 0.25f * line[k + 1];
+                prev = cur;
+            }
+        }
+        repaint();
+    }
 
     R plotArea() const
     {
@@ -766,7 +785,7 @@ private:
 
     /** Les deux traces au point f, en points (vers le bas positif) : écart gauche / droite de chaque bande (ampleur de
         CURRENT, DRIFT, LEAN) et la courbe vivante des cloches de CURRENT de chaque canal. */
-    void traces (double f, const double x[3], bool anySolo, double out[2]) const
+    void traces (double f, const double x[3], bool anySolo, double out[2], double& crackle) const
     {
         constexpr double big = 1.0e7;   // évaluation analogique (sans préchauffage)
         auto lr = [&] (bool low, double fc)
@@ -778,6 +797,7 @@ private:
                             lr (false, x[1]) * lr (true, x[2]), lr (false, x[1]) * lr (false, x[2]) };
         const bool stereo = meters.stereo.load() != 0;
         out[0] = out[1] = 0.0;
+        crackle = 0.0;
         for (int b = 0; b < vision::numBands; ++b)
         {
             if (w[b] < 1.0e-4) continue;
@@ -800,6 +820,7 @@ private:
                 // la courbe des cloches, agrandie (14 points par dB), et l'écart du canal
                 out[c] += w[b] * (-14.0 * dev + (c == 0 ? -sep : sep) + shift);
             }
+            crackle += w[b] * 3.5 * std::min (amt, 2.0);   // jusqu'à ±3,5 points à 100 %, ±7 à 200 %
         }
     }
 
@@ -812,5 +833,8 @@ private:
     float hyperX = 350.0f;
     int hoverBand = -1, hoverXo = -1, hoverLabel = -1, dragBand = -1, dragXo = -1;
     float startLevel = 0.0f, startY = 0.0f, scale = 1.0f;
+    static constexpr int crackPoints = 512;
+    std::array<std::array<float, crackPoints>, 2> crack {};
+    juce::Random rng;
 };
 } // namespace ui
