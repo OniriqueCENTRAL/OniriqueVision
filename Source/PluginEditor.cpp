@@ -371,7 +371,7 @@ void VisionEditor::resized()
         sq (trans, cx + 80, y0 + 28, 32, 26);
         sq (pre, cx - 66, y0 + 95, 14, 14);
         sq (post, cx + 66, y0 + 95, 14, 14);
-        auto fader = [&] (ui::VFader& f, float x) { place (f, R (44, 232).withCentre ({ x, y0 + 236 })); f.setScale (s); };
+        auto fader = [&] (ui::VFader& f, float x) { place (f, R (50, 232).withCentre ({ x, y0 + 236 })); f.setScale (s); };
         fader (boxyFreq, cx - 84);
         fader (boxyCut, cx - 32);
         fader (harshCut, cx + 32);
@@ -481,8 +481,8 @@ void VisionEditor::renderBackground()
         text (g, "CUT", R (cx - 54, y0 + 354, 44, 12), small, haze);
         text (g, "CUT", R (cx + 10, y0 + 354, 44, 12), small, haze);
         text (g, "FREQ", R (cx + 62, y0 + 354, 44, 12), small, haze);
-        text (g, "BOXY", R (cx - 106, y0 + 112, 96, 10), font (Face::body, 7.5f, 0.2f), dim);
-        text (g, "HARSH", R (cx + 10, y0 + 112, 96, 10), font (Face::body, 7.5f, 0.2f), dim);
+        text (g, "BOXY", R (cx - 106, y0 + 106, 96, 10), font (Face::body, 7.5f, 0.2f), dim);
+        text (g, "HARSH", R (cx + 10, y0 + 106, 96, 10), font (Face::body, 7.5f, 0.2f), dim);
     }
 }
 

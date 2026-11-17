@@ -20,6 +20,13 @@
 //==============================================================================
 namespace ui
 {
+/** La police réduite juste assez pour que le texte tienne dans la largeur donnée. */
+inline juce::Font fitFont (juce::Font f, const juce::String& t, float width)
+{
+    const float w = juce::GlyphArrangement::getStringWidth (f, t);
+    return w > width && w > 0.0f ? f.withHeight (f.getHeight() * width / w) : f;
+}
+
 inline float plainOf (juce::RangedAudioParameter& p) { return p.convertFrom0to1 (p.getValue()); }
 
 inline void setPlain (juce::RangedAudioParameter& p, float v)
@@ -275,11 +282,18 @@ public:
         g.setColour (accent);
         g.fillRect (thumb.getX() + 2 * scale, thumb.getCentreY() - 1.0f * scale, thumb.getWidth() - 4 * scale, 2.0f * scale);
         const auto f = font (Face::mono, 7.5f * scale);
-        text (g, top, juce::Rectangle<float> (b.getX(), b.getY(), b.getWidth(), 10 * scale), f, dim);
-        text (g, bottom, juce::Rectangle<float> (b.getX(), b.getBottom() - 10 * scale, b.getWidth(), 10 * scale), f, dim);
+        // au survol, la valeur prend la place du haut de la course, en entier dans le fader
+        const auto topLine = juce::Rectangle<float> (b.getX(), b.getY(), b.getWidth(), 11 * scale);
         if (dragging || hovering)
-            text (g, param.getCurrentValueAsText(), juce::Rectangle<float> (b.getX() - 20 * scale, y - 22 * scale, b.getWidth() + 40 * scale, 12 * scale),
-                  font (Face::mono, 9.5f * scale), onirique::look::emberPink);
+        {
+            const auto v = param.getCurrentValueAsText();
+            g.setColour (juce::Colour (0xff0b0809));
+            g.fillRoundedRectangle (topLine, 3 * scale);
+            text (g, v, topLine, ui::fitFont (font (Face::mono, 8.5f * scale), v, b.getWidth() - 2 * scale), onirique::look::emberPink);
+        }
+        else
+            text (g, top, topLine, f, dim);
+        text (g, bottom, juce::Rectangle<float> (b.getX(), b.getBottom() - 10 * scale, b.getWidth(), 10 * scale), f, dim);
     }
     void mouseEnter (const juce::MouseEvent&) override { hovering = true; repaint(); }
     void mouseExit (const juce::MouseEvent&) override { hovering = false; repaint(); }
