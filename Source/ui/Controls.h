@@ -4,7 +4,7 @@
 #include "Theme.h"
 
 //==============================================================================
-//  Les commandes de HALO, dans la DA ONIRIQUE : potard à graduations (OniriqueKnob.h), gélules et segments en verre
+//  Les commandes de VISION, dans la DA ONIRIQUE : potard à graduations (OniriqueKnob.h), gélules et segments en verre
 //  (OniriqueDA.h). Toutes se dessinent à partir de leur taille (l'éditeur les place en points × échelle).
 //==============================================================================
 namespace ui

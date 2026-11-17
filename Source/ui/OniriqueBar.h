@@ -1096,7 +1096,7 @@ public:
 
     void refresh()
     {
-        copySlot.setButtonText (bank.getSlot() == 0 ? "Copy A to B" : "Copy B to A");
+        { const char* n[3] { "A", "B", "C" }; copySlot.setButtonText (String ("Copy ") + n[bank.getSlot()] + " to " + n[bank.nextSlot()]); }
         pasteSettings.setEnabled (bank.canPaste());
 
         const auto zoom = getZoom ? getZoom() : 1.0f;
@@ -1252,6 +1252,7 @@ public:
 
         slotA.onClick = [this] { bank.switchToSlot (0); refresh(); };
         slotB.onClick = [this] { bank.switchToSlot (1); refresh(); };
+        slotC.onClick = [this] { bank.switchToSlot (2); refresh(); };
         copy.onClick = [this] { bank.copyToClipboard(); refresh(); };
         paste.onClick = [this] { bank.paste(); refresh(); };
         more.onClick = [this] { if (menu.isVisible()) closePanels(); else openMenu(); };
@@ -1261,14 +1262,15 @@ public:
         next.setTooltip (String::fromUTF8 ("Le preset d'après, parmi ceux que les filtres du navigateur laissent passer."));
         field.setTooltip (String::fromUTF8 ("Le preset chargé. Un clic ouvre le navigateur : chercher, filtrer, enregistrer."));
         in.setTooltip (String::fromUTF8 ("IN : allumé, le plugin est en service ; éteint, le son ressort tel qu'il est entré."));
-        slotA.setTooltip (String::fromUTF8 ("A : un premier jeu de réglages, à comparer avec B."));
-        slotB.setTooltip (String::fromUTF8 ("B : un second jeu de réglages. Le menu ⋯ copie l'un dans l'autre."));
+        slotA.setTooltip (String::fromUTF8 ("A : un premier jeu de réglages, à comparer avec B et C."));
+        slotB.setTooltip (String::fromUTF8 ("B : un deuxième jeu de réglages. Le menu ⋯ copie le jeu écouté dans le suivant."));
+        slotC.setTooltip (String::fromUTF8 ("C : un troisième jeu de réglages. Les trois sont gardés avec le projet."));
         copy.setTooltip (String::fromUTF8 ("Copie les réglages, à coller dans une autre instance du plugin."));
         paste.setTooltip (String::fromUTF8 ("Colle les réglages copiés dans une autre instance du plugin."));
-        more.setTooltip (String::fromUTF8 ("Plus : copier A dans B, importer des presets, la taille de la fenêtre."));
+        more.setTooltip (String::fromUTF8 ("Plus : copier le jeu écouté dans le suivant (A, B, C), importer des presets, la taille de la fenêtre."));
 
         for (Component* c : { (Component*) &previous, (Component*) &next, (Component*) &field, (Component*) &in,
-                              (Component*) &slotA, (Component*) &slotB, (Component*) &more })
+                              (Component*) &slotA, (Component*) &slotB, (Component*) &slotC, (Component*) &more })
             addAndMakeVisible (c);
 
         addChildComponent (copy);
@@ -1431,7 +1433,7 @@ public:
         group (navWell, { &previous, &next }, { 24, 24 });
 
         // Le champ du preset prend ce que laissent les autres, 330 au plus.
-        const auto others = in.preferredWidth() + slotA.preferredWidth() + slotB.preferredWidth() + 4 + 6 + 2 * gap
+        const auto others = in.preferredWidth() + slotA.preferredWidth() + slotB.preferredWidth() + slotC.preferredWidth() + 6 + 6 + 2 * gap
                             + (compact ? 0 : copy.preferredWidth() + paste.preferredWidth() + 6 + gap)
                             + (compact ? 0 : pillWidth + h + 2 * gap);
         const auto fieldWidth = jlimit (120, compact ? 1000 : 330, row.getWidth() - others);
@@ -1439,7 +1441,7 @@ public:
         row.removeFromLeft (gap);
 
         group (inWell, { &in }, { in.preferredWidth() });
-        group (slotWell, { &slotA, &slotB }, { slotA.preferredWidth(), slotB.preferredWidth() });
+        group (slotWell, { &slotA, &slotB, &slotC }, { slotA.preferredWidth(), slotB.preferredWidth(), slotC.preferredWidth() });
 
         if (! compact)
             group (clipWell, { &copy, &paste }, { copy.preferredWidth(), paste.preferredWidth() });
@@ -1591,6 +1593,7 @@ private:
 
         slotA.setToggleState (bank.getSlot() == 0, dontSendNotification);
         slotB.setToggleState (bank.getSlot() == 1, dontSendNotification);
+        slotC.setToggleState (bank.getSlot() == 2, dontSendNotification);
 
         // Le presse-papier, pas à chaque tour.
         if (! compact && ++ticks % 4 == 0)
@@ -1613,7 +1616,7 @@ private:
 
     IconButton previous { Icon::previous, false }, next { Icon::next, false }, more { Icon::dots, true };
     PresetField field;
-    Segment in { "IN", true }, slotA { "A", true }, slotB { "B", true }, copy { "COPY" }, paste { "PASTE" };
+    Segment in { "IN", true }, slotA { "A", true }, slotB { "B", true }, slotC { "C", true }, copy { "COPY" }, paste { "PASTE" };
 
     Sheet sheet;
     Browser browser;

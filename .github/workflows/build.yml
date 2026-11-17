@@ -1,6 +1,6 @@
 name: Build
 
-# À chaque envoi sur main : compile Mac (universel, VST3 + AU) et Windows (VST3), passe le banc de mesure, puis, si
+# À chaque envoi sur main : compile Mac (universel, VST3 + AU) et Windows (VST3), passe les deux bancs (moteur, plugin), puis, si
 # tout réussit, publie la version dans ONIRIQUE CENTRAL (numéro attribué par le serveur, patch + 1).
 on:
   push:
@@ -8,9 +8,9 @@ on:
   workflow_dispatch:
 
 env:
-  TARGET: OniriqueHalo             # cible CMake
-  PRODUCT: ONIRIQUE HALO           # PRODUCT_NAME du plugin
-  SLUG: onirique-halo              # identifiant du plugin dans ONIRIQUE CENTRAL (= identifiant de licence)
+  TARGET: OniriqueVision            # cible CMake
+  PRODUCT: ONIRIQUE VISION          # PRODUCT_NAME du plugin
+  SLUG: onirique-vision             # identifiant du plugin dans ONIRIQUE CENTRAL (= identifiant de licence)
 
 jobs:
   mac:
@@ -19,7 +19,7 @@ jobs:
       - uses: actions/checkout@v4
       - name: Compiler (universel arm64 + x86_64)
         run: |
-          cmake -B build -G Xcode -DHALO_TESTS=OFF
+          cmake -B build -G Xcode -DVISION_TESTS=OFF
           cmake --build build --config Release --target OniriqueHalo_VST3 OniriqueHalo_AU -- -quiet
       - name: Signer (ad hoc) et empaqueter
         run: |
@@ -44,7 +44,7 @@ jobs:
           cmake --build build --config Release
       - name: Banc de mesure du moteur
         shell: bash
-        run: build/HaloBench_artefacts/Release/HaloBench.exe
+        run: build/VisionBench_artefacts/Release/VisionBench.exe && build/VisionPluginTest_artefacts/Release/VisionPluginTest.exe
       - name: Empaqueter
         shell: bash
         run: |

@@ -247,12 +247,12 @@ public:
     }
 
     //==============================================================================
-    // La comparaison A/B : deux jeux de réglages, celui qu'on entend et l'autre.
+    // La comparaison A/B/C : trois jeux de réglages, celui qu'on entend et les deux autres.
     int getSlot() const   { return activeSlot; }
 
     void switchToSlot (int slot)
     {
-        slot = juce::jlimit (0, 1, slot);
+        slot = juce::jlimit (0, numSlots - 1, slot);
 
         if (slot == activeSlot)
             return;
@@ -275,12 +275,16 @@ public:
         }
     }
 
+    /** Copie le jeu écouté dans le suivant (A vers B, B vers C, C vers A). */
     void copyToOtherSlot()
     {
         const juce::ScopedLock lock (slotLock);
-        slots[1 - activeSlot] = capture();
-        slots[1 - activeSlot].setProperty (kPresetProperty, getCurrentName(), nullptr);
+        const int to = nextSlot();
+        slots[to] = capture();
+        slots[to].setProperty (kPresetProperty, getCurrentName(), nullptr);
     }
+    int nextSlot() const { return (activeSlot + 1) % numSlots; }
+    static constexpr int numSlots = 3;
 
     //==============================================================================
     // Le presse-papier : les réglages d'une instance collés dans une autre du même plugin.
@@ -337,42 +341,42 @@ public:
     }
 
     //==============================================================================
-    /** Dans l'arbre que le plugin enregistre : le côté A/B écouté, et l'autre. */
+    /** Dans l'arbre que le plugin enregistre : le jeu écouté (A, B ou C), et les deux autres. */
     void writeState (juce::ValueTree& tree) const
     {
         const juce::ScopedLock lock (slotLock);
 
         tree.setProperty (kSlotProperty, activeSlot, nullptr);
-        tree.removeChild (tree.getChildWithName (kOtherSlot), nullptr);
+        for (auto c = tree.getChildWithName (kOtherSlot); c.isValid(); c = tree.getChildWithName (kOtherSlot))
+            tree.removeChild (c, nullptr);
 
-        if (slots[1 - activeSlot].isValid())
-        {
-            juce::ValueTree other (kOtherSlot);
-            other.copyPropertiesFrom (slots[1 - activeSlot], nullptr);
-            tree.appendChild (other, nullptr);
-        }
+        for (int i = 0; i < numSlots; ++i)
+            if (i != activeSlot && slots[i].isValid())
+            {
+                juce::ValueTree other (kOtherSlot);
+                other.copyPropertiesFrom (slots[i], nullptr);
+                other.setProperty (kSlotIndex, i, nullptr);
+                tree.appendChild (other, nullptr);
+            }
     }
 
-    /** Avant apvts.replaceState : reprend l'autre côté A/B, et le retire de l'arbre. */
+    /** Avant apvts.replaceState : reprend les deux autres jeux, et les retire de l'arbre. */
     void readState (juce::ValueTree& tree)
     {
-        const auto other = tree.getChildWithName (kOtherSlot);
+        const juce::ScopedLock lock (slotLock);
 
+        activeSlot = juce::jlimit (0, numSlots - 1, (int) tree.getProperty (kSlotProperty, 0));
+        for (auto& sl : slots) sl = {};
+
+        for (auto other = tree.getChildWithName (kOtherSlot); other.isValid(); other = tree.getChildWithName (kOtherSlot))
         {
-            const juce::ScopedLock lock (slotLock);
-
-            activeSlot = juce::jlimit (0, 1, (int) tree.getProperty (kSlotProperty, 0));
-            slots[0] = slots[1] = {};
-
-            if (other.isValid())
-            {
-                juce::ValueTree snapshot (kSnapshot);
-                snapshot.copyPropertiesFrom (other, nullptr);
-                slots[1 - activeSlot] = snapshot;
-            }
+            const int i = juce::jlimit (0, numSlots - 1, (int) other.getProperty (kSlotIndex, activeSlot == 0 ? 1 : 0));
+            juce::ValueTree snapshot (kSnapshot);
+            snapshot.copyPropertiesFrom (other, nullptr);
+            snapshot.removeProperty (kSlotIndex, nullptr);
+            if (i != activeSlot) slots[i] = snapshot;
+            tree.removeChild (other, nullptr);
         }
-
-        tree.removeChild (other, nullptr);
     }
 
     //==============================================================================
@@ -440,7 +444,8 @@ private:
     }
 
     inline static const juce::Identifier kPresetProperty { "preset" }, kSlotProperty { "slot" }, kOtherSlot { "OtherSlot" },
-                                         kSnapshot { "Snapshot" }, kPluginProperty { "plugin" };
+                                         kSnapshot { "Snapshot" }, kPluginProperty { "plugin" },
+                                         kSlotIndex { "slotIndex" };
 
     juce::AudioProcessorValueTreeState& state;
     juce::String plugin;
@@ -448,7 +453,7 @@ private:
     juce::StringArray tagNames, left, favourites;
 
     juce::CriticalSection slotLock;
-    juce::ValueTree slots[2];
+    juce::ValueTree slots[3];
     int activeSlot = 0;
 
     JUCE_DECLARE_NON_COPYABLE (PresetBank)

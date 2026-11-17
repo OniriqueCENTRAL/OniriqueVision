@@ -679,9 +679,9 @@ public:
         fadeLen = std::max (1, (int) (0.04 * fs));
 
         for (auto& s : { &inGain, &outGain }) s->setTime (0.02, fs);
-        bypassMix.setTime (0.03, fs);
+        bypassStep = 1.0 / std::max (1.0, 0.03 * fs);   // BYPASS : rampe linéaire de 30 ms, exacte à son terme
         inGain.snap (dbToGain (p.inDb)); outGain.snap (dbToGain (effectiveOut (p)));
-        bypassMix.snap (p.bypass ? 1.0 : 0.0);
+        bypassV = p.bypass ? 1.0 : 0.0;
         for (int c = 0; c < 2; ++c) { inHp[c].reset(); inLp[c].reset(); outHp[c].reset(); outLp[c].reset();
                                       inHp[c].lastF = inLp[c].lastF = outHp[c].lastF = outLp[c].lastF = -1.0; }
         for (auto& v : peakHold) v = 0.0;
@@ -777,7 +777,7 @@ private:
 
         // filtres de sortie, gain de sortie, BYPASS
         outGain.target = dbToGain (effectiveOut (p));
-        bypassMix.target = p.bypass ? 1.0 : 0.0;
+        const double bypassTarget = p.bypass ? 1.0 : 0.0;
         for (int c = 0; c < ch; ++c)
         {
             outHp[c].set (true, std::max (p.outHp, 11.0), p.outSlope, fs);
@@ -787,7 +787,9 @@ private:
         const int lat = latency[coreOs[current]];
         for (int i = 0; i < n; ++i)
         {
-            const double g = outGain.next(), bp = bypassMix.next();
+            const double g = outGain.next();
+            bypassV = bypassTarget > bypassV ? std::min (bypassTarget, bypassV + bypassStep) : std::max (bypassTarget, bypassV - bypassStep);
+            const double bp = bypassV;
             for (int c = 0; c < ch; ++c)
             {
                 float* s = io.getWritePointer (c);
@@ -795,7 +797,8 @@ private:
                 if (ohp) v = outHp[c].process (v);
                 if (olp) v = outLp[c].process (v);
                 v *= g;
-                if (bp > 1.0e-6) v += bp * (readDelay (c, n - i, lat) - v);
+                if (bp >= 1.0) v = readDelay (c, n - i, lat);
+                else if (bp > 1.0e-6) v += bp * (readDelay (c, n - i, lat) - v);
                 s[i] = (float) v;
             }
         }
@@ -894,7 +897,8 @@ private:
     juce::AudioBuffer<float> work, dry, fadeBuf, delayLine;
     static constexpr int delaySize = 16384;
     int writePos = 0;
-    Smooth inGain, outGain, bypassMix;
+    Smooth inGain, outGain;
+    double bypassV = 0.0, bypassStep = 0.001;
     ButterCascade inHp[2], inLp[2], outHp[2], outLp[2];
     double peakHold[2] {};
 };

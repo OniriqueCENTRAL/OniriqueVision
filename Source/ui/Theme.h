@@ -8,7 +8,7 @@
 #include "OniriqueLicenseData.h"
 
 //==============================================================================
-//  Charte de HALO : la DA ONIRIQUE (celle de VOCALBOX, OniriqueDA.h / OniriqueKnob.h) : fond nuit et taches de
+//  Charte de VISION : la DA ONIRIQUE (celle de VOCALBOX, OniriqueDA.h / OniriqueKnob.h) : fond nuit et taches de
 //  braise, panneaux en verre, gélules, potards à graduations. L'accent est la couleur de l'interface (menu ⋯).
 //==============================================================================
 namespace ui

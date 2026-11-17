@@ -110,3 +110,22 @@ if(VISION_TESTS)
     target_link_libraries(VisionBench PRIVATE juce::juce_dsp juce::juce_audio_basics
         juce::juce_recommended_config_flags juce::juce_recommended_warning_flags)
 endif()
+
+# Test du plugin entier (console) : état du projet, A / B / C, presets, paramètres, bus, BYPASS, latence
+if(VISION_PLUGIN AND VISION_TESTS)
+    juce_add_console_app(VisionPluginTest PRODUCT_NAME "VisionPluginTest")
+    # les sources du plugin compilées dans le test (sans la licence), pas le binaire du plugin
+    target_sources(VisionPluginTest PRIVATE Tests/PluginTest.cpp Source/PluginProcessor.cpp Source/PluginEditor.cpp)
+    target_compile_definitions(VisionPluginTest PRIVATE VISION_LICENCE=0 JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0)
+    target_include_directories(VisionPluginTest PRIVATE Source ${CMAKE_CURRENT_SOURCE_DIR})
+    if(MSVC)
+        target_compile_options(VisionPluginTest PRIVATE /utf-8)
+    endif()
+    target_link_libraries(VisionPluginTest PRIVATE VisionAssets juce::juce_audio_utils juce::juce_dsp juce::juce_recommended_config_flags)
+    if(TARGET OniriqueVisionLicenseData)
+        target_link_libraries(VisionPluginTest PRIVATE OniriqueVisionLicenseData)
+    else()
+        juce_add_binary_data(VisionTestFonts HEADER_NAME OniriqueLicenseData.h NAMESPACE OniriqueLicenseData SOURCES ${VISION_FONTS})
+        target_link_libraries(VisionPluginTest PRIVATE VisionTestFonts)
+    endif()
+endif()
